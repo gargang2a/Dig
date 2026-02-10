@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 1d9ea3ac44f25814ab05be547f9dbd4f, type: 3}
+  m_Name: DefaultSettings
+  m_EditorClassIdentifier: 
+  BaseSpeed: 5
+  BaseTurnSpeed: 180
+  BoostMultiplier: 1.5
+  ScorePerSizeUnit: 100
+  MinScale: 0.5
+  MaxScale: 3
+  SegmentDistance: 0.5
+  TunnelWidthMultiplier: 0.8

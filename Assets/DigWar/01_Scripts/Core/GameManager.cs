@@ -1,52 +1,75 @@
 using UnityEngine;
 using Core.Data;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace Core
 {
+    /// <summary>
+    /// 게임의 전역 상태를 관리하는 싱글톤.
+    /// 점수, 게임 활성 여부 등 런타임 데이터를 보관하고
+    /// 점수 변경 시 구독자에게 이벤트를 발행한다.
+    /// </summary>
     public class GameManager : MonoBehaviour
     {
         public static GameManager Instance { get; private set; }
 
         [Header("Settings")]
-        public GameSettings Settings;
+        [SerializeField] private GameSettings _settings;
+        public GameSettings Settings => _settings;
 
-        [Header("Runtime Data")]
-        public float CurrentScore;
-        public bool IsGameActive = false;
+        public float CurrentScore { get; private set; }
+        public bool IsGameActive { get; private set; }
+
+        public event System.Action<float> OnScoreChanged;
 
         private void Awake()
         {
-            if (Instance == null)
-            {
-                Instance = this;
-                DontDestroyOnLoad(gameObject);
-            }
-            else
+            if (Instance != null && Instance != this)
             {
                 Destroy(gameObject);
+                return;
             }
+
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
         }
 
         private void Start()
         {
-            // Temporary: Start game immediately for testing
             StartGame();
         }
 
-        public event System.Action<float> OnScoreChanged;
-
         public void StartGame()
         {
-            CurrentScore = 0;
+            CurrentScore = 0f;
             IsGameActive = true;
-            Debug.Log("Game Started");
             OnScoreChanged?.Invoke(CurrentScore);
         }
 
+        /// <summary>
+        /// 점수를 증감한다. 음수 입력 시에도 0 미만으로 내려가지 않는다.
+        /// </summary>
         public void AddScore(float amount)
         {
-            CurrentScore += amount;
+            CurrentScore = Mathf.Max(0f, CurrentScore + amount);
             OnScoreChanged?.Invoke(CurrentScore);
         }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            if (_settings != null) return;
+
+            string[] guids = AssetDatabase.FindAssets("t:GameSettings");
+            if (guids.Length > 0)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                _settings = AssetDatabase.LoadAssetAtPath<GameSettings>(path);
+                Debug.Log($"[GameManager] Settings 자동 할당: {path}");
+            }
+        }
+#endif
     }
 }

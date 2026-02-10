@@ -1,84 +1,99 @@
 using UnityEngine;
 using Core;
+using Core.Data;
 
 namespace Systems
 {
+    /// <summary>
+    /// 점수에 따라 플레이어 크기와 카메라 줌을 조정한다.
+    /// 로그 스케일 곡선으로 초반 빠른 성장, 후반 완만한 성장을 표현한다.
+    /// </summary>
     public class ProgressionManager : MonoBehaviour
     {
-        [Header("Target References")]
-        public Transform PlayerTransform;
-        public Camera MainCamera;
+        [Header("References")]
+        [SerializeField] private Transform _playerTransform;
+        [SerializeField] private Camera _mainCamera;
 
-        [Header("Damping")]
-        public float ScaleSmoothTime = 0.5f;
-        public float ZoomSmoothTime = 0.5f;
+        [Header("Smoothing")]
+        [SerializeField, Range(0.01f, 2f)] private float _scaleSmoothTime = 0.5f;
+        [SerializeField, Range(0.01f, 2f)] private float _zoomSmoothTime = 0.5f;
 
-        private float _currentScaleVelocity;
-        private float _currentZoomVelocity;
+        private GameSettings _settings;
+        private float _scaleVelocity;
+        private float _zoomVelocity;
         private float _targetScale;
         private float _targetZoom;
 
         private void Start()
         {
-            if (GameManager.Instance != null)
+            if (GameManager.Instance == null || GameManager.Instance.Settings == null)
             {
-                GameManager.Instance.OnScoreChanged += HandleScoreChanged;
-                // Initialize targets
-                HandleScoreChanged(GameManager.Instance.CurrentScore);
+                Debug.LogError("[ProgressionManager] GameManager 또는 Settings 누락");
+                enabled = false;
+                return;
             }
-            
-            // Default targets if GameManager not ready
-            _targetScale = PlayerTransform.localScale.x;
-            if (MainCamera != null) _targetZoom = MainCamera.orthographicSize;
+
+            _settings = GameManager.Instance.Settings;
+            GameManager.Instance.OnScoreChanged += OnScoreChanged;
+
+            // 초기 스케일/줌을 즉시 적용하여 시작 시 SmoothDamp가 보이지 않도록
+            OnScoreChanged(GameManager.Instance.CurrentScore);
+
+            if (_playerTransform != null)
+                _playerTransform.localScale = new Vector3(_targetScale, _targetScale, 1f);
+
+            if (_mainCamera != null)
+                _mainCamera.orthographicSize = _targetZoom;
         }
 
         private void OnDestroy()
         {
             if (GameManager.Instance != null)
-            {
-                GameManager.Instance.OnScoreChanged -= HandleScoreChanged;
-            }
+                GameManager.Instance.OnScoreChanged -= OnScoreChanged;
         }
 
-        private void Update()
+        private void LateUpdate()
         {
-            if (PlayerTransform == null || GameManager.Instance == null) return;
+            if (_playerTransform == null) return;
 
-            // Smoothly interpolate scale
-            float newScale = Mathf.SmoothDamp(
-                PlayerTransform.localScale.x, 
-                _targetScale, 
-                ref _currentScaleVelocity, 
-                ScaleSmoothTime
+            float scale = Mathf.SmoothDamp(
+                _playerTransform.localScale.x, _targetScale,
+                ref _scaleVelocity, _scaleSmoothTime
             );
+            _playerTransform.localScale = new Vector3(scale, scale, 1f);
 
-            // Apply uniform scale
-            PlayerTransform.localScale = Vector3.one * newScale;
-
-            // Smoothly interpolate camera zoom
-            if (MainCamera != null)
+            if (_mainCamera != null)
             {
-                MainCamera.orthographicSize = Mathf.SmoothDamp(
-                    MainCamera.orthographicSize,
-                    _targetZoom,
-                    ref _currentZoomVelocity,
-                    ZoomSmoothTime
+                _mainCamera.orthographicSize = Mathf.SmoothDamp(
+                    _mainCamera.orthographicSize, _targetZoom,
+                    ref _zoomVelocity, _zoomSmoothTime
                 );
             }
         }
 
-        private void HandleScoreChanged(float score)
+        private void OnScoreChanged(float score)
         {
-            var settings = GameManager.Instance.Settings;
-            
-            // Calculate scale based on score: Base + (Score / Factor)
-            float scoreFactor = score / settings.ScorePerSizeUnit;
-            float rawScale = settings.MinScale + scoreFactor;
-            _targetScale = Mathf.Clamp(rawScale, settings.MinScale, settings.MaxScale);
-
-            // Calculate camera zoom based on scale
-            // Example: Zoom = 5 + (Scale * 2)
-            _targetZoom = 5f + (_targetScale * 2f);
+            float growth = Mathf.Log(1f + score / _settings.ScorePerSizeUnit);
+            _targetScale = Mathf.Clamp(
+                _settings.MinScale + growth,
+                _settings.MinScale,
+                _settings.MaxScale
+            );
+            _targetZoom = _settings.BaseCameraZoom + _targetScale * _settings.CameraZoomPerScale;
         }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            if (_playerTransform == null)
+            {
+                var player = FindObjectOfType<Player.PlayerController>();
+                if (player != null)
+                    _playerTransform = player.transform;
+            }
+            if (_mainCamera == null)
+                _mainCamera = Camera.main;
+        }
+#endif
     }
 }
