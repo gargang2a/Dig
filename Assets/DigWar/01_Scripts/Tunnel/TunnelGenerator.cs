@@ -9,9 +9,9 @@ using UnityEditor;
 namespace Tunnel
 {
     /// <summary>
-    /// 플레이어 이동 경로를 따라 LineRenderer 기반 터널을 생성한다.
-    /// 일정 포인트 수마다 세그먼트를 분할하고,
-    /// 오래된 세그먼트만 충돌을 활성화하여 자기 터널 자살을 방지한다.
+    /// 플레이어 이동 경로를 따라 터널을 생성한다.
+    /// 점수에 비례하여 최대 길이가 늘어나며,
+    /// 초과 시 꼬리가 부드럽게 수축한다.
     /// </summary>
     public class TunnelGenerator : MonoBehaviour
     {
@@ -26,10 +26,16 @@ namespace Tunnel
 
         private Vector3 _lastPosition;
         private bool _hasFirstPoint;
+        private int _totalPointCount;
 
-        /// <summary>최근 N개 세그먼트는 충돌 비활성. 자기 터널 자살 방지.</summary>
+        // 꼬리 슬라이딩
+        private float _tailLerp;
+
         private const int SAFE_SEGMENT_COUNT = 2;
         private const int MAX_POINTS_PER_SEGMENT = 200;
+
+        // 플레이어 머리 근처 보호 포인트 수 (충돌 안전 + 시각적 최소 길이)
+        private const int SAFE_HEAD_POINTS = 5;
 
         private void Start()
         {
@@ -52,6 +58,8 @@ namespace Tunnel
 
             if (sqrDist >= threshold * threshold)
                 AddPoint();
+
+            UpdateTailSlide();
         }
 
         private void AddPoint()
@@ -67,15 +75,61 @@ namespace Tunnel
 
             _currentSegment.AddPoint(pos);
             _pointsInCurrentSegment++;
+            _totalPointCount++;
 
             if (_pointsInCurrentSegment >= MAX_POINTS_PER_SEGMENT)
             {
                 CreateNewSegment();
-                // 이전 세그먼트와 시각적으로 이어지도록 동일 포인트로 시작
                 _currentSegment.AddPoint(pos);
             }
 
             _lastPosition = pos;
+        }
+
+        /// <summary>
+        /// 꼬리를 부드럽게 슬라이딩한다.
+        /// 플레이어 이동 속도에 정확히 맞춰 제거하여 끊김을 방지한다.
+        /// </summary>
+        private void UpdateTailSlide()
+        {
+            float score = GameManager.Instance.CurrentScore;
+            float maxDistance = _settings.BaseTunnelLength
+                + score * _settings.TunnelLengthPerScore;
+            int maxPoints = Mathf.Max(2, Mathf.FloorToInt(maxDistance / _settings.SegmentDistance));
+
+            if (_totalPointCount <= maxPoints || _segments.Count == 0) return;
+
+            // 플레이어 실제 이동 속도와 동기화하여 꼬리 제거 속도 일치
+            float playerSpeed = _settings.BaseSpeed * transform.localScale.x;
+            float slideSpeed = playerSpeed / Mathf.Max(_settings.SegmentDistance, 0.01f);
+            _tailLerp += slideSpeed * Time.deltaTime;
+
+            // 한 프레임에 여러 포인트를 넘길 수 있으므로 while로 처리
+            while (_tailLerp >= 1f && _totalPointCount > maxPoints)
+            {
+                var oldest = _segments[0];
+
+                if (oldest == _currentSegment && oldest.PointCount <= SAFE_HEAD_POINTS) break;
+                if (oldest.PointCount < 2) break;
+
+                oldest.RemoveFirstPoint();
+                _totalPointCount--;
+                _tailLerp -= 1f; // 초과분 이월 (0으로 리셋하지 않음)
+
+                if (oldest != _currentSegment && oldest.PointCount < 2)
+                {
+                    _segments.RemoveAt(0);
+                    Destroy(oldest.gameObject);
+                }
+            }
+
+            // 남은 lerp로 시각적 슬라이딩
+            if (_tailLerp > 0f && _tailLerp < 1f && _segments.Count > 0)
+            {
+                var oldest = _segments[0];
+                if (oldest.PointCount >= 2)
+                    oldest.SlideTailPoint(_tailLerp);
+            }
         }
 
         private void CreateNewSegment()
@@ -95,10 +149,6 @@ namespace Tunnel
             ActivateOldColliders();
         }
 
-        /// <summary>
-        /// SAFE_SEGMENT_COUNT 이전의 세그먼트 충돌을 켠다.
-        /// 플레이어가 이미 지나간 구간만 위험해진다.
-        /// </summary>
         private void ActivateOldColliders()
         {
             int idx = _segments.Count - 1 - SAFE_SEGMENT_COUNT;
@@ -109,8 +159,11 @@ namespace Tunnel
         public void UpdateWidth(float newScale)
         {
             float width = newScale * _settings.TunnelWidthMultiplier;
-            if (_currentSegment != null)
-                _currentSegment.SetWidth(width);
+            for (int i = 0; i < _segments.Count; i++)
+            {
+                if (_segments[i] != null)
+                    _segments[i].SetWidth(width);
+            }
         }
 
         public void DestroyAllSegments()
@@ -121,6 +174,8 @@ namespace Tunnel
                     Destroy(_segments[i].gameObject);
             }
             _segments.Clear();
+            _totalPointCount = 0;
+            _tailLerp = 0f;
         }
 
 #if UNITY_EDITOR

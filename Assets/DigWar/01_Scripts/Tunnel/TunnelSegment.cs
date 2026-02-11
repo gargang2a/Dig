@@ -4,9 +4,8 @@ using UnityEngine;
 namespace Tunnel
 {
     /// <summary>
-    /// 터널 한 구간을 담당하는 LineRenderer + EdgeCollider2D 조합.
-    /// LineRenderer가 부드러운 곡선과 고정 너비를 제공하고,
-    /// EdgeCollider2D(Trigger)가 충돌 판정을 처리한다.
+    /// 터널 한 구간. LineRenderer + EdgeCollider2D.
+    /// 꼬리 끝 포인트를 Lerp로 슬라이딩하여 부드럽게 수축할 수 있다.
     /// </summary>
     [RequireComponent(typeof(LineRenderer))]
     public class TunnelSegment : MonoBehaviour
@@ -19,6 +18,8 @@ namespace Tunnel
         private int _dirtyCount;
         private const int COLLIDER_SYNC_INTERVAL = 5;
 
+        public int PointCount => _points.Count;
+
         public void Initialize(Material material, Color color, float width)
         {
             _lr = GetComponent<LineRenderer>();
@@ -27,16 +28,16 @@ namespace Tunnel
             _lr.endColor = color;
             _lr.startWidth = width;
             _lr.endWidth = width;
-            _lr.numCornerVertices = 8;   // 곡선부 부드러움
-            _lr.numCapVertices = 4;      // 양 끝 마감
+            _lr.numCornerVertices = 8;
+            _lr.numCapVertices = 4;
             _lr.useWorldSpace = true;
-            _lr.sortingOrder = -1;       // 플레이어 스프라이트 아래
+            _lr.sortingOrder = -1;
             _lr.positionCount = 0;
 
             _collider = gameObject.AddComponent<EdgeCollider2D>();
             _collider.edgeRadius = width * 0.5f;
-            _collider.isTrigger = true;  // Kinematic RB와 충돌하려면 Trigger 필수
-            _collider.enabled = false;   // TunnelGenerator가 안전 거리 후 활성화
+            _collider.isTrigger = true;
+            _collider.enabled = false;
         }
 
         public void AddPoint(Vector3 worldPos)
@@ -48,20 +49,57 @@ namespace Tunnel
             _colliderPoints.Add(worldPos);
             _dirtyCount++;
 
-            // ToArray 할당을 줄이기 위해 일정 간격으로만 동기화
             if (_dirtyCount >= COLLIDER_SYNC_INTERVAL)
             {
-                _collider.points = _colliderPoints.ToArray();
+                SyncCollider();
                 _dirtyCount = 0;
             }
         }
 
-        /// <summary>남은 포인트를 콜라이더에 반영한다. 세그먼트 종료 시 호출.</summary>
-        public void FlushCollider()
+        /// <summary>
+        /// 꼬리 끝(첫 번째 포인트)을 두 번째 포인트 방향으로 t만큼 이동시킨다.
+        /// t=0이면 원래 위치, t=1이면 두 번째 포인트와 동일 (제거 가능).
+        /// </summary>
+        public void SlideTailPoint(float t)
+        {
+            if (_points.Count < 2) return;
+
+            Vector3 lerped = Vector3.Lerp(_points[0], _points[1], t);
+            _lr.SetPosition(0, lerped);
+
+            // 콜라이더도 동기화
+            if (_colliderPoints.Count >= 2 && _collider.enabled)
+            {
+                _colliderPoints[0] = lerped;
+                SyncCollider();
+            }
+        }
+
+        /// <summary>
+        /// 첫 번째 포인트를 실제로 제거한다. SlideTailPoint(1)에 도달한 후 호출.
+        /// </summary>
+        public void RemoveFirstPoint()
+        {
+            if (_points.Count < 2) return;
+
+            _points.RemoveAt(0);
+            _lr.positionCount = _points.Count;
+            _lr.SetPositions(_points.ToArray());
+
+            if (_colliderPoints.Count > 0)
+                _colliderPoints.RemoveAt(0);
+
+            if (_collider.enabled)
+                SyncCollider();
+        }
+
+        private void SyncCollider()
         {
             if (_colliderPoints.Count >= 2)
                 _collider.points = _colliderPoints.ToArray();
         }
+
+        public void FlushCollider() => SyncCollider();
 
         public void EnableCollider()
         {

@@ -61,7 +61,9 @@ namespace Player
         /// </summary>
         private void Move()
         {
-            float speed = _settings.BaseSpeed;
+            // 스케일이 커지면 카메라가 줌아웃 → 같은 속도가 느려 보임.
+            // 스케일에 비례해서 속도를 높여 체감 속도를 일정하게 유지한다.
+            float speed = _settings.BaseSpeed * transform.localScale.x;
 
             if (_isBoosting && GameManager.Instance.CurrentScore > 0f)
             {

@@ -19,6 +19,7 @@ namespace Systems
         [SerializeField, Range(0.01f, 2f)] private float _zoomSmoothTime = 0.5f;
 
         private GameSettings _settings;
+        private Tunnel.TunnelGenerator _tunnelGenerator;
         private float _scaleVelocity;
         private float _zoomVelocity;
         private float _targetScale;
@@ -34,9 +35,9 @@ namespace Systems
             }
 
             _settings = GameManager.Instance.Settings;
+            _tunnelGenerator = FindObjectOfType<Tunnel.TunnelGenerator>();
             GameManager.Instance.OnScoreChanged += OnScoreChanged;
 
-            // 초기 스케일/줌을 즉시 적용하여 시작 시 SmoothDamp가 보이지 않도록
             OnScoreChanged(GameManager.Instance.CurrentScore);
 
             if (_playerTransform != null)
@@ -61,6 +62,10 @@ namespace Systems
                 ref _scaleVelocity, _scaleSmoothTime
             );
             _playerTransform.localScale = new Vector3(scale, scale, 1f);
+
+            // 터널 너비도 플레이어 스케일에 동기화
+            if (_tunnelGenerator != null)
+                _tunnelGenerator.UpdateWidth(scale);
 
             if (_mainCamera != null)
             {
