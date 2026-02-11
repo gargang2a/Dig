@@ -15,8 +15,19 @@ MonoBehaviour:
   BaseSpeed: 5
   BaseTurnSpeed: 180
   BoostMultiplier: 1.5
+  BoostScoreCostPerSecond: 5
   ScorePerSizeUnit: 100
   MinScale: 0.5
   MaxScale: 3
-  SegmentDistance: 0.5
+  BaseCameraZoom: 3
+  CameraZoomPerScale: 3
+  SegmentDistance: 0.4
   TunnelWidthMultiplier: 0.8
+  MaxSegmentsPerChunk: 100
+  BaseTunnelLength: 0.5
+  TunnelLengthPerScore: 0.01
+  GemScore: 10
+  GemSpawnInterval: 0.5
+  GemSpawnRadius: 15
+  MaxGemCount: 100
+  GemMagnetRadius: 1

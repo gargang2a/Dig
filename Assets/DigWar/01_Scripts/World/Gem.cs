@@ -12,6 +12,7 @@ namespace World
     public class Gem : MonoBehaviour, IPoolable
     {
         private CircleCollider2D _collider;
+        private SpriteRenderer _sr;
         private GameObject _originPrefab;
         private GemSpawner _spawner;
         private Transform _playerTransform;
@@ -22,14 +23,34 @@ namespace World
         private const float WOBBLE_AMPLITUDE = 0.08f;
         private const float WOBBLE_SPEED = 3f;
 
+        // Glow (발광 펴싱)
+        private Color _baseColor;
+        private float _glowOffset;
+        private const float GLOW_SPEED = 5f;
+        private const float GLOW_INTENSITY = 2.5f; // HDR 배율 (원래 색상 대비)
+
         // Magnet (자석 흡인)
         private bool _isMagnetized;
         private float _magnetSpeed;
         private float _targetScale;
 
+        // 랜덤 젼 색상 팔레트 (Slither.io 스타일)
+        private static readonly Color[] GEM_COLORS = new Color[]
+        {
+            new Color(1f, 0.3f, 0.3f),   // 빨강
+            new Color(0.3f, 1f, 0.3f),   // 초록
+            new Color(0.3f, 0.6f, 1f),   // 파랑
+            new Color(1f, 1f, 0.2f),     // 노랑
+            new Color(1f, 0.5f, 0f),     // 주황
+            new Color(0.8f, 0.3f, 1f),   // 보라
+            new Color(0f, 1f, 0.9f),     // 청록
+            new Color(1f, 0.4f, 0.7f),   // 핑크
+        };
+
         private void Awake()
         {
             _collider = GetComponent<CircleCollider2D>();
+            _sr = GetComponent<SpriteRenderer>();
         }
 
         public void Initialize(GameObject prefab)
@@ -44,8 +65,14 @@ namespace World
 
             _spawnPosition = transform.position;
             _wobbleOffset = Random.Range(0f, Mathf.PI * 2f);
+            _glowOffset = Random.Range(0f, Mathf.PI * 2f);
             _isMagnetized = false;
             _magnetSpeed = 0f;
+
+            // 랜덤 색상 적용
+            _baseColor = GEM_COLORS[Random.Range(0, GEM_COLORS.Length)];
+            if (_sr != null)
+                _sr.color = _baseColor;
 
             // 프리팹 스케일 기준으로 팝 애니메이션
             if (_targetScale <= 0f)
@@ -74,12 +101,29 @@ namespace World
                 CheckMagnetRange();
             }
 
+            // 발광 펴싱 (Slither.io 스타일 반짝임)
+            UpdateGlow();
+
             // 스폰 시 스케일 복귀 (팝 애니메이션)
             if (transform.localScale.x < _targetScale - 0.01f)
             {
                 float s = Mathf.MoveTowards(transform.localScale.x, _targetScale, Time.deltaTime * _targetScale * 4f);
                 transform.localScale = new Vector3(s, s, 1f);
             }
+        }
+
+        /// <summary>
+        /// 색상 밝기를 주기적으로 변화시켜 발광하는 느낌.
+        /// </summary>
+        private void UpdateGlow()
+        {
+            if (_sr == null) return;
+
+            float pulse = Mathf.Sin((Time.time + _glowOffset) * GLOW_SPEED);
+            // 0.0 ~ 1.0 로 정규화
+            float t = (pulse + 1f) * 0.5f;
+            // 기본 색상 ~ HDR 밝은 색상 사이 보간
+            _sr.color = Color.Lerp(_baseColor, _baseColor * GLOW_INTENSITY, t);
         }
 
         /// <summary>

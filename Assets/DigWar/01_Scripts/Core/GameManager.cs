@@ -23,6 +23,7 @@ namespace Core
         public bool IsGameActive { get; private set; }
 
         public event System.Action<float> OnScoreChanged;
+        public event System.Action OnPlayerDied;
 
         private void Awake()
         {
@@ -55,6 +56,18 @@ namespace Core
         {
             CurrentScore = Mathf.Max(0f, CurrentScore + amount);
             OnScoreChanged?.Invoke(CurrentScore);
+        }
+
+        /// <summary>
+        /// 플레이어 사망 처리. 경계 이탈, 터널 충돌 등에서 호출.
+        /// </summary>
+        public void KillPlayer()
+        {
+            if (!IsGameActive) return;
+
+            IsGameActive = false;
+            OnPlayerDied?.Invoke();
+            Debug.Log($"[GameManager] 사망! 최종 점수: {CurrentScore:F0}");
         }
 
 #if UNITY_EDITOR

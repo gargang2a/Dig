@@ -56,5 +56,13 @@ namespace Core.Data
         [Min(10)]   public int MaxGemCount = 100;
         [Tooltip("보석이 빨려들어가기 시작하는 거리")]
         [Min(0.5f)] public float GemMagnetRadius = 3f;
+
+        [Header("맵")]
+        [Tooltip("원형 맵 반경 (월드 유닛)")]
+        [Min(10f)]  public float MapRadius = 50f;
+        [Tooltip("경계 근처 경고 시작 거리 (안쪽)")]
+        [Min(1f)]   public float MapWarningZone = 5f;
+        [Tooltip("경계선 원 해상도 (점 개수)")]
+        [Range(32, 128)] public int BoundarySegments = 64;
     }
 }

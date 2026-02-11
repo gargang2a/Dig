@@ -77,5 +77,20 @@ namespace World
         {
             _activeGemCount = Mathf.Max(0, _activeGemCount - 1);
         }
+
+        /// <summary>
+        /// 특정 위치에 젬을 드롭한다. 부스트 중 꼬리에서 소모된 점수가 젬으로 떨어짐.
+        /// </summary>
+        public void DropGemAt(Vector3 worldPos)
+        {
+            if (_gemPrefab == null || ObjectPoolManager.Instance == null) return;
+
+            GameObject obj = ObjectPoolManager.Instance.Spawn(_gemPrefab, worldPos, Quaternion.identity);
+            var gem = obj.GetComponent<Gem>();
+            if (gem != null)
+                gem.Initialize(_gemPrefab);
+
+            _activeGemCount++;
+        }
     }
 }

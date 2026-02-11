@@ -61,8 +61,6 @@ namespace Player
         /// </summary>
         private void Move()
         {
-            // 스케일이 커지면 카메라가 줌아웃 → 같은 속도가 느려 보임.
-            // 스케일에 비례해서 속도를 높여 체감 속도를 일정하게 유지한다.
             float speed = _settings.BaseSpeed * transform.localScale.x;
 
             if (_isBoosting && GameManager.Instance.CurrentScore > 0f)
@@ -71,8 +69,15 @@ namespace Player
                 GameManager.Instance.AddScore(-_settings.BoostScoreCostPerSecond * Time.deltaTime);
             }
 
+            CurrentSpeed = speed;
             transform.position += transform.up * (speed * Time.deltaTime);
         }
+
+        /// <summary>현재 프레임의 실제 이동 속도. 부스트 포함.</summary>
+        public float CurrentSpeed { get; private set; }
+
+        /// <summary>현재 부스트 중인지 여부.</summary>
+        public bool IsBoosting => _isBoosting;
 
         /// <summary>
         /// 마우스 방향으로 회전한다.
