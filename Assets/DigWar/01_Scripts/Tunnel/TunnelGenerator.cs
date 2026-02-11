@@ -17,7 +17,8 @@ namespace Tunnel
     {
         [Header("Visuals")]
         [SerializeField] private Material _tunnelMaterial;
-        [SerializeField] private Color _tunnelColor = new Color(0.25f, 0.16f, 0.08f, 1f);
+        [SerializeField] private Color _tunnelColor = new Color(0.77f, 0.64f, 0.40f, 1f);  // 밝은 모래
+        [SerializeField] private Color _outlineColor = new Color(0.24f, 0.17f, 0.10f, 1f);  // 어두운 테두리
 
         private GameSettings _settings;
         private readonly List<TunnelSegment> _segments = new List<TunnelSegment>();
@@ -34,7 +35,7 @@ namespace Tunnel
         // 꼬리 슬라이딩
         private float _tailLerp;
         private int _boostDropCounter; // 부스트 젬 드롭 간격 카운터
-        private Player.PlayerController _playerController;
+        private Player.IDigger _digger;
         private World.GemSpawner _gemSpawner;
 
         private const int SAFE_SEGMENT_COUNT = 2;
@@ -51,7 +52,7 @@ namespace Tunnel
             }
 
             _settings = GameManager.Instance.Settings;
-            _playerController = GetComponent<Player.PlayerController>();
+            _digger = GetComponent<Player.IDigger>();
             _gemSpawner = FindObjectOfType<World.GemSpawner>();
             _lastPosition = transform.position;
             CreateNewSegment();
@@ -120,13 +121,13 @@ namespace Tunnel
             if (oldest == _currentSegment && oldest.PointCount <= SAFE_HEAD_POINTS) return;
 
             // 실제 플레이어 속도(부스트 포함)로 동기화
-            float actualSpeed = _playerController != null
-                ? _playerController.CurrentSpeed
+            float actualSpeed = _digger != null
+                ? _digger.CurrentSpeed
                 : _settings.BaseSpeed * transform.localScale.x;
             float slideSpeed = actualSpeed / Mathf.Max(_settings.SegmentDistance, 0.01f);
             _tailLerp += slideSpeed * Time.deltaTime;
 
-            bool isBoosting = _playerController != null && _playerController.IsBoosting;
+            bool isBoosting = _digger != null && _digger.IsBoosting;
 
             // 실제 포인트 제거
             while (_tailLerp >= 1f)
@@ -181,7 +182,7 @@ namespace Tunnel
             obj.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
 
             var segment = obj.AddComponent<TunnelSegment>();
-            segment.Initialize(_tunnelMaterial, _tunnelColor, width);
+            segment.Initialize(_tunnelMaterial, _tunnelColor, _outlineColor, width);
 
             _segments.Add(segment);
             _currentSegment = segment;
@@ -217,6 +218,25 @@ namespace Tunnel
             _segments.Clear();
             _totalPointCount = 0;
             _tailLerp = 0f;
+        }
+
+        /// <summary>
+        /// 터널 비주얼을 외부에서 설정한다 (봇 스포너 등).
+        /// Start() 전에 호출해야 첫 세그먼트부터 적용된다.
+        /// </summary>
+        public void SetTunnelVisuals(Material material, Color fillColor, Color outlineColor)
+        {
+            _tunnelMaterial = material;
+            _tunnelColor = fillColor;
+            _outlineColor = outlineColor;
+        }
+
+        // 하위호환
+        public void SetTunnelVisuals(Material material, Color color)
+        {
+            Color outline = color * 0.5f;
+            outline.a = 1f;
+            SetTunnelVisuals(material, color, outline);
         }
 
 #if UNITY_EDITOR

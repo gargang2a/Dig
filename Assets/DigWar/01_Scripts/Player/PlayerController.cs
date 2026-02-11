@@ -10,7 +10,7 @@ namespace Player
     /// 카메라 추적과의 프레임 불일치가 발생하지 않는다.
     /// </summary>
     [RequireComponent(typeof(Rigidbody2D))]
-    public class PlayerController : MonoBehaviour
+    public class PlayerController : MonoBehaviour, IDigger
     {
         [Header("References")]
         [SerializeField] private Transform _visualRoot;
@@ -109,6 +109,7 @@ namespace Player
         {
             if (_isDead) return;
 
+            // TunnelSegment 충돌 → 사망
             if (other.GetComponent<Tunnel.TunnelSegment>() != null)
                 Die();
         }
@@ -116,7 +117,27 @@ namespace Player
         private void Die()
         {
             _isDead = true;
-            Debug.Log($"[Player] 사망: {gameObject.name}");
+            CurrentSpeed = 0f;
+
+            // GameManager에 사망 알림
+            if (GameManager.Instance != null)
+                GameManager.Instance.KillPlayer();
+
+            // 터널 파괴
+            var tunnel = GetComponent<Tunnel.TunnelGenerator>();
+            if (tunnel != null)
+                tunnel.DestroyAllSegments();
+
+            // 시각적 피드백: 빨갛게 변하고 작아짐
+            var sr = _visualRoot != null
+                ? _visualRoot.GetComponent<SpriteRenderer>()
+                : GetComponentInChildren<SpriteRenderer>();
+            if (sr != null)
+                sr.color = new Color(1f, 0.2f, 0.2f, 0.7f);
+
+            transform.localScale *= 0.5f;
+
+            Debug.Log($"[Player] 사망! 최종 점수: {GameManager.Instance?.CurrentScore:F0}");
         }
 
 #if UNITY_EDITOR

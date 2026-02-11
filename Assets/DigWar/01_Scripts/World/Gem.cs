@@ -13,6 +13,7 @@ namespace World
     {
         private CircleCollider2D _collider;
         private SpriteRenderer _sr;
+        private MaterialPropertyBlock _mpb;
         private GameObject _originPrefab;
         private GemSpawner _spawner;
         private Transform _playerTransform;
@@ -27,7 +28,7 @@ namespace World
         private Color _baseColor;
         private float _glowOffset;
         private const float GLOW_SPEED = 5f;
-        private const float GLOW_INTENSITY = 2.5f; // HDR 배율 (원래 색상 대비)
+        private const float GLOW_INTENSITY = 4f; // HDR 배율 — URP Bloom threshold(0.8) 초과해야 빛남
 
         // Magnet (자석 흡인)
         private bool _isMagnetized;
@@ -46,11 +47,13 @@ namespace World
             new Color(0f, 1f, 0.9f),     // 청록
             new Color(1f, 0.4f, 0.7f),   // 핑크
         };
+    private static readonly int ColorId = Shader.PropertyToID("_Color");
 
         private void Awake()
         {
             _collider = GetComponent<CircleCollider2D>();
             _sr = GetComponent<SpriteRenderer>();
+            _mpb = new MaterialPropertyBlock();
         }
 
         public void Initialize(GameObject prefab)
@@ -71,8 +74,7 @@ namespace World
 
             // 랜덤 색상 적용
             _baseColor = GEM_COLORS[Random.Range(0, GEM_COLORS.Length)];
-            if (_sr != null)
-                _sr.color = _baseColor;
+            ApplyHDRColor(_baseColor);
 
             // 프리팹 스케일 기준으로 팝 애니메이션
             if (_targetScale <= 0f)
@@ -101,7 +103,7 @@ namespace World
                 CheckMagnetRange();
             }
 
-            // 발광 펴싱 (Slither.io 스타일 반짝임)
+            // 발광 펄싱 (Slither.io 스타일 반짝임)
             UpdateGlow();
 
             // 스폰 시 스케일 복귀 (팝 애니메이션)
@@ -113,17 +115,30 @@ namespace World
         }
 
         /// <summary>
-        /// 색상 밝기를 주기적으로 변화시켜 발광하는 느낌.
+        /// MaterialPropertyBlock으로 HDR 색상을 적용하여 Bloom이 반응하게 한다.
+        /// SpriteRenderer.color는 0~1 클램핑이라 HDR 불가.
         /// </summary>
         private void UpdateGlow()
         {
             if (_sr == null) return;
 
             float pulse = Mathf.Sin((Time.time + _glowOffset) * GLOW_SPEED);
-            // 0.0 ~ 1.0 로 정규화
             float t = (pulse + 1f) * 0.5f;
-            // 기본 색상 ~ HDR 밝은 색상 사이 보간
-            _sr.color = Color.Lerp(_baseColor, _baseColor * GLOW_INTENSITY, t);
+            // HDR 색상: 기본 색상 × 발광 강도 (1.0 초과 → Bloom 반응)
+            Color hdrColor = _baseColor * Mathf.Lerp(1f, GLOW_INTENSITY, t);
+            hdrColor.a = 1f;
+            ApplyHDRColor(hdrColor);
+        }
+
+        /// <summary>
+        /// MaterialPropertyBlock을 통해 HDR 색상을 SpriteRenderer에 적용.
+        /// </summary>
+        private void ApplyHDRColor(Color hdrColor)
+        {
+            if (_sr == null) return;
+            _sr.GetPropertyBlock(_mpb);
+            _mpb.SetColor(ColorId, hdrColor);
+            _sr.SetPropertyBlock(_mpb);
         }
 
         /// <summary>
@@ -177,13 +192,26 @@ namespace World
 
         private void OnTriggerEnter2D(Collider2D other)
         {
+            // 플레이어 수집
             if (other.GetComponent<Player.PlayerController>() != null)
-                Collect();
+            {
+                Collect(true);
+                return;
+            }
+
+            // AI 봇 수집 (점수는 봇 독립 관리)
+            var ai = other.GetComponent<Player.AIController>();
+            if (ai != null)
+            {
+                ai.AddScore(GameManager.Instance != null
+                    ? GameManager.Instance.Settings.GemScore : 10f);
+                Collect(false);
+            }
         }
 
-        private void Collect()
+        private void Collect(bool isPlayer = true)
         {
-            if (GameManager.Instance != null)
+            if (isPlayer && GameManager.Instance != null)
                 GameManager.Instance.AddScore(GameManager.Instance.Settings.GemScore);
 
             if (_spawner == null)

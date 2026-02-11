@@ -4,13 +4,14 @@ using UnityEngine;
 namespace Tunnel
 {
     /// <summary>
-    /// 터널 한 구간. LineRenderer + EdgeCollider2D.
+    /// 터널 한 구간. 이중 LineRenderer(외곽선 + 채움) + EdgeCollider2D.
     /// 꼬리 끝 포인트를 Lerp로 슬라이딩하여 부드럽게 수축할 수 있다.
     /// </summary>
     [RequireComponent(typeof(LineRenderer))]
     public class TunnelSegment : MonoBehaviour
     {
-        private LineRenderer _lr;
+        private LineRenderer _lr;         // 채움 (앞)
+        private LineRenderer _outlineLr;  // 외곽선 (뒤)
         private EdgeCollider2D _collider;
         private readonly List<Vector3> _points = new List<Vector3>(200);
         private readonly List<Vector2> _colliderPoints = new List<Vector2>(200);
@@ -26,35 +27,64 @@ namespace Tunnel
             return _points.Count > 0 ? _points[0] : Vector3.zero;
         }
 
-        public void Initialize(Material material, Color color, float width)
+        public void Initialize(Material material, Color fillColor, Color outlineColor, float width)
         {
-            _lr = GetComponent<LineRenderer>();
-            _lr.material = material;
-            _lr.startColor = color;
-            _lr.endColor = color;
-            _lr.startWidth = width;
-            _lr.endWidth = width;
-            _lr.numCornerVertices = 8;
-            _lr.numCapVertices = 4;
-            _lr.useWorldSpace = true;
-            _lr.sortingOrder = -1;
-            _lr.positionCount = 0;
+            // --- 외곽선 LineRenderer (뒤쪽, 더 넓음) ---
+            var outlineObj = new GameObject("Outline");
+            outlineObj.transform.SetParent(transform, false);
+            _outlineLr = outlineObj.AddComponent<LineRenderer>();
+            SetupLineRenderer(_outlineLr, material, outlineColor,
+                width * 1.5f, sortingOrder: -2, corners: 8, caps: 4);
 
+            // --- 채움 LineRenderer (앞쪽) ---
+            _lr = GetComponent<LineRenderer>();
+            SetupLineRenderer(_lr, material, fillColor,
+                width, sortingOrder: -1, corners: 8, caps: 4);
+
+            // --- 콜라이더 ---
             _collider = gameObject.AddComponent<EdgeCollider2D>();
             _collider.edgeRadius = width * 0.5f;
             _collider.isTrigger = true;
             _collider.enabled = false;
         }
 
+        // 하위호환: 이전 시그니처 지원
+        public void Initialize(Material material, Color color, float width)
+        {
+            // 외곽선 = 채움보다 어두운 색
+            Color outline = color * 0.5f;
+            outline.a = 1f;
+            Initialize(material, color, outline, width);
+        }
+
+        private void SetupLineRenderer(LineRenderer lr, Material mat,
+            Color color, float width, int sortingOrder, int corners, int caps)
+        {
+            lr.material = mat;
+            lr.startColor = color;
+            lr.endColor = color;
+            lr.startWidth = width;
+            lr.endWidth = width;
+            lr.numCornerVertices = corners;
+            lr.numCapVertices = caps;
+            lr.useWorldSpace = true;
+            lr.sortingOrder = sortingOrder;
+            lr.positionCount = 0;
+        }
+
         public void AddPoint(Vector3 worldPos)
         {
             _points.Add(worldPos);
 
-            // LineRenderer: 영구 포인트 + 라이브 헤드(1개 추가)
-            // 라이브 헤드는 매 프레임 UpdateLiveHead에서 플레이어 위치로 갱신된다.
-            _lr.positionCount = _points.Count + 1;
-            _lr.SetPosition(_points.Count - 1, worldPos);
-            _lr.SetPosition(_points.Count, worldPos); // 라이브 헤드 초기값
+            int count = _points.Count;
+            // 영구 포인트 + 라이브 헤드(1개)
+            _lr.positionCount = count + 1;
+            _lr.SetPosition(count - 1, worldPos);
+            _lr.SetPosition(count, worldPos);
+
+            _outlineLr.positionCount = count + 1;
+            _outlineLr.SetPosition(count - 1, worldPos);
+            _outlineLr.SetPosition(count, worldPos);
 
             _colliderPoints.Add(worldPos);
             _dirtyCount++;
@@ -67,18 +97,18 @@ namespace Tunnel
         }
 
         /// <summary>
-        /// 매 프레임 호출. LineRenderer 맨 끝을 플레이어 위치에 고정하여
-        /// 포인트 추가 사이의 시각적 갭을 제거한다.
+        /// 매 프레임 호출. LineRenderer 맨 끝을 플레이어 위치에 고정.
         /// </summary>
         public void UpdateLiveHead(Vector3 playerPos)
         {
             if (_lr.positionCount > 0)
                 _lr.SetPosition(_lr.positionCount - 1, playerPos);
+            if (_outlineLr.positionCount > 0)
+                _outlineLr.SetPosition(_outlineLr.positionCount - 1, playerPos);
         }
 
         /// <summary>
-        /// 꼬리 끝(첫 번째 포인트)을 두 번째 포인트 방향으로 t만큼 이동시킨다.
-        /// t=0이면 원래 위치, t=1이면 두 번째 포인트와 동일 (제거 가능).
+        /// 꼬리 끝 포인트를 두 번째 방향으로 t만큼 슬라이딩.
         /// </summary>
         public void SlideTailPoint(float t)
         {
@@ -86,8 +116,8 @@ namespace Tunnel
 
             Vector3 lerped = Vector3.Lerp(_points[0], _points[1], t);
             _lr.SetPosition(0, lerped);
+            _outlineLr.SetPosition(0, lerped);
 
-            // 콜라이더도 동기화
             if (_colliderPoints.Count >= 2 && _collider.enabled)
             {
                 _colliderPoints[0] = lerped;
@@ -96,7 +126,7 @@ namespace Tunnel
         }
 
         /// <summary>
-        /// 첫 번째 포인트를 실제로 제거한다. SlideTailPoint(1)에 도달한 후 호출.
+        /// 첫 번째 포인트를 실제로 제거한다.
         /// </summary>
         public void RemoveFirstPoint()
         {
@@ -104,12 +134,18 @@ namespace Tunnel
 
             _points.RemoveAt(0);
 
-            // 영구 포인트 + 라이브 헤드(+1) 유지
-            _lr.positionCount = _points.Count + 1;
-            for (int i = 0; i < _points.Count; i++)
+            int count = _points.Count;
+            _lr.positionCount = count + 1;
+            _outlineLr.positionCount = count + 1;
+
+            for (int i = 0; i < count; i++)
+            {
                 _lr.SetPosition(i, _points[i]);
-            // 라이브 헤드는 마지막 영구 포인트와 동일 위치로 초기화
-            _lr.SetPosition(_points.Count, _points[_points.Count - 1]);
+                _outlineLr.SetPosition(i, _points[i]);
+            }
+
+            _lr.SetPosition(count, _points[count - 1]);
+            _outlineLr.SetPosition(count, _points[count - 1]);
 
             if (_colliderPoints.Count > 0)
                 _colliderPoints.RemoveAt(0);
@@ -139,6 +175,11 @@ namespace Tunnel
             {
                 _lr.startWidth = width;
                 _lr.endWidth = width;
+            }
+            if (_outlineLr != null)
+            {
+                _outlineLr.startWidth = width * 1.5f;
+                _outlineLr.endWidth = width * 1.5f;
             }
             if (_collider != null)
                 _collider.edgeRadius = width * 0.5f;

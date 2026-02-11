@@ -6,22 +6,20 @@ namespace World
 {
     /// <summary>
     /// 맵 지형과 원형 경계선을 생성한다.
-    /// 흙 배경 SpriteRenderer + 경계 LineRenderer.
+    /// 여러 흙 스프라이트를 랜덤으로 배치하여 자연스러운 배경을 만든다.
     /// </summary>
     public class MapManager : MonoBehaviour
     {
         [Header("지형")]
-        [Tooltip("흙 지형 스프라이트 (02_Sprites에서 할당)")]
-        [SerializeField] private Sprite _groundSprite;
-        [Tooltip("흙 배경 색상 보정")]
-        [SerializeField] private Color _groundColor = new Color(0.55f, 0.35f, 0.17f, 1f);
-        [Tooltip("타일 1칸의 월드 크기 (작을수록 패턴이 촘촘)")]
-        [SerializeField] private float _tileSize = 5f;
+        [Tooltip("흙 타일 스프라이트 배열 (랜덤 선택)")]
+        [SerializeField] private Sprite[] _groundSprites;
+        [Tooltip("타일 1칸의 월드 크기")]
+        [SerializeField] private float _tileSize = 2f;
+        [Tooltip("타일 회전 랜덤화")]
+        [SerializeField] private bool _randomRotation = true;
 
         [Header("경계선")]
-        [Tooltip("경계선 색상")]
         [SerializeField] private Color _boundaryColor = new Color(1f, 0.2f, 0.2f, 0.8f);
-        [Tooltip("경계선 두께")]
         [SerializeField] private float _boundaryWidth = 0.3f;
 
         private GameSettings _settings;
@@ -43,40 +41,65 @@ namespace World
         }
 
         /// <summary>
-        /// 흙 지형 배경 생성. Quad 메시에 타일링 머테리얼을 적용하여
-        /// 텍스처가 타일맵처럼 반복된다.
+        /// 개별 SpriteRenderer 타일을 랜덤 배치하여 자연스러운 지형 생성.
+        /// 원형 맵 범위 안에만 배치한다.
         /// </summary>
         private void CreateGround()
         {
-            var groundObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            groundObj.name = "Ground";
-            groundObj.transform.position = new Vector3(0f, 0f, 1f);
-
-            // Quad 콜라이더 제거 (불필요)
-            var collider = groundObj.GetComponent<MeshCollider>();
-            if (collider != null) Destroy(collider);
-
-            float diameter = _settings.MapRadius * 2f;
-            groundObj.transform.localScale = new Vector3(diameter, diameter, 1f);
-
-            // Unlit/Texture 셰이더: 타일링 정상 지원
-            var renderer = groundObj.GetComponent<MeshRenderer>();
-            var mat = new Material(Shader.Find("Unlit/Texture"));
-
-            if (_groundSprite != null && _groundSprite.texture != null)
+            if (_groundSprites == null || _groundSprites.Length == 0)
             {
-                var tex = _groundSprite.texture;
-                tex.wrapMode = TextureWrapMode.Repeat;
-                tex.filterMode = FilterMode.Point; // 픽셀 아트면 Point, 부드러운 텍스처면 Bilinear
-                mat.mainTexture = tex;
-
-                // 타일링: 맵 크기 / 타일 크기 = 반복 횟수
-                float tiling = diameter / Mathf.Max(_tileSize, 0.1f);
-                mat.mainTextureScale = new Vector2(tiling, tiling);
+                Debug.LogWarning("[MapManager] Ground Sprites 배열이 비어있습니다.");
+                return;
             }
 
-            renderer.material = mat;
-            renderer.sortingOrder = -10;
+            float radius = _settings.MapRadius;
+            float halfSize = _tileSize * 0.5f;
+
+            // 타일 부모 오브젝트
+            var parent = new GameObject("GroundTiles");
+            parent.transform.position = new Vector3(0f, 0f, 1f);
+
+            // 시드 고정 (매번 동일한 맵 레이아웃)
+            Random.State prevState = Random.state;
+            Random.InitState(42);
+
+            // 그리드 순회, 원형 범위 안에만 배치
+            for (float x = -radius; x <= radius; x += _tileSize)
+            {
+                for (float y = -radius; y <= radius; y += _tileSize)
+                {
+                    // 원형 경계 체크 (타일 중심 기준)
+                    float distSqr = x * x + y * y;
+                    if (distSqr > (radius + halfSize) * (radius + halfSize))
+                        continue;
+
+                    var tileObj = new GameObject("Tile");
+                    tileObj.transform.SetParent(parent.transform, false);
+                    tileObj.transform.localPosition = new Vector3(x, y, 0f);
+
+                    // 랜덤 회전 (0, 90, 180, 270도)
+                    if (_randomRotation)
+                    {
+                        float rot = Random.Range(0, 4) * 90f;
+                        tileObj.transform.localRotation = Quaternion.Euler(0f, 0f, rot);
+                    }
+
+                    // 랜덤 스프라이트 선택
+                    var sr = tileObj.AddComponent<SpriteRenderer>();
+                    sr.sprite = _groundSprites[Random.Range(0, _groundSprites.Length)];
+                    sr.sortingOrder = -10;
+                    sr.drawMode = SpriteDrawMode.Simple;
+
+                    // 타일 크기 맞추기
+                    float spriteWorldSize = sr.sprite.rect.width / sr.sprite.pixelsPerUnit;
+                    float scale = _tileSize / spriteWorldSize;
+                    tileObj.transform.localScale = new Vector3(scale, scale, 1f);
+
+                    sr.color = Color.white;
+                }
+            }
+
+            Random.state = prevState;
         }
 
         /// <summary>
@@ -84,7 +107,7 @@ namespace World
         /// </summary>
         private void CreateBoundary()
         {
-            var boundaryObj = new GameObject("MapBoundary");
+            var boundaryObj = new GameObject("MapBoundary_Line");
             boundaryObj.transform.position = Vector3.zero;
 
             _boundaryLine = boundaryObj.AddComponent<LineRenderer>();
@@ -94,8 +117,8 @@ namespace World
             _boundaryLine.startWidth = _boundaryWidth;
             _boundaryLine.endWidth = _boundaryWidth;
 
-            // 단색 머테리얼
-            _boundaryLine.material = new Material(Shader.Find("Sprites/Default"));
+            _boundaryLine.material = new Material(
+                Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default"));
             _boundaryLine.startColor = _boundaryColor;
             _boundaryLine.endColor = _boundaryColor;
 

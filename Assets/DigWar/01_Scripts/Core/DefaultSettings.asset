@@ -21,13 +21,16 @@ MonoBehaviour:
   MaxScale: 3
   BaseCameraZoom: 3
   CameraZoomPerScale: 3
-  SegmentDistance: 0.4
+  SegmentDistance: 0.3
   TunnelWidthMultiplier: 0.8
   MaxSegmentsPerChunk: 100
-  BaseTunnelLength: 0.5
-  TunnelLengthPerScore: 0.01
+  BaseTunnelLength: 10
+  TunnelLengthPerScore: 0.5
   GemScore: 10
   GemSpawnInterval: 0.5
   GemSpawnRadius: 15
   MaxGemCount: 100
   GemMagnetRadius: 1
+  MapRadius: 50
+  MapWarningZone: 5
+  BoundarySegments: 64
