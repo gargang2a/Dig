@@ -90,6 +90,9 @@ namespace Player
             // AI 컨트롤러
             botObj.AddComponent<AIController>();
 
+            // 먼지 파티클
+            botObj.AddComponent<DiggingParticle>();
+
             // 터널 생성기
             var tunnel = botObj.AddComponent<Tunnel.TunnelGenerator>();
 

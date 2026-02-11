@@ -19,6 +19,8 @@ namespace Tunnel
         [SerializeField] private Material _tunnelMaterial;
         [SerializeField] private Color _tunnelColor = new Color(0.77f, 0.64f, 0.40f, 1f);  // 밝은 모래
         [SerializeField] private Color _outlineColor = new Color(0.24f, 0.17f, 0.10f, 1f);  // 어두운 테두리
+        [Tooltip("터널 스트립 텍스쳐 (울퉁불퉁 테두리)")]
+        [SerializeField] private Texture2D _tunnelTexture;
 
         private GameSettings _settings;
         private readonly List<TunnelSegment> _segments = new List<TunnelSegment>();
@@ -182,7 +184,7 @@ namespace Tunnel
             obj.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
 
             var segment = obj.AddComponent<TunnelSegment>();
-            segment.Initialize(_tunnelMaterial, _tunnelColor, _outlineColor, width);
+            segment.Initialize(_tunnelMaterial, _tunnelColor, _outlineColor, width, _tunnelTexture);
 
             _segments.Add(segment);
             _currentSegment = segment;
