@@ -21,7 +21,14 @@ namespace Systems
         private void OnEnable()
         {
             if (GameManager.Instance != null)
+            {
                 GameManager.Instance.OnPlayerDied += OnPlayerDied;
+                Debug.Log("[GameOverUI] Subscribed to OnPlayerDied");
+            }
+            else
+            {
+                Debug.LogWarning("[GameOverUI] GameManager Instance is NULL! Subscription failed.");
+            }
         }
 
         private void OnDisable()
@@ -47,6 +54,7 @@ namespace Systems
 
         private void OnPlayerDied()
         {
+            Debug.Log("[GameOverUI] OnPlayerDied Event Received -> Activating Panel");
             _isGameOver = true;
             float score = GameManager.Instance != null
                 ? GameManager.Instance.CurrentScore : 0f;
@@ -55,11 +63,17 @@ namespace Systems
             {
                 string name = GameManager.Instance != null
                     ? GameManager.Instance.PlayerName : "Player";
-                _scoreText.text = $"{name}\n최종 점수: {score:F0}";
+                // <size=120%><color=#FFD700>Name</color></size>
+                // <size=80%>Final Score: 999</size>
+                _scoreText.richText = true; // Ensure Rich Text is enabled
+                _scoreText.text = $"<size=120%><color=#FFD700>{name}</color></size>\n<size=75%>Final Score: {score:F0}</size>";
             }
 
             if (_panel != null)
+            {
                 _panel.SetActive(true);
+                Debug.Log($"[GameOverUI] Panel Active State: {_panel.activeSelf}");
+            }
         }
 
         private void Restart()

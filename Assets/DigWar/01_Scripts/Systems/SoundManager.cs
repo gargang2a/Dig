@@ -28,6 +28,11 @@ namespace Systems
         [SerializeField, Range(0f, 1f)] private float _masterVolume = 1f;
         [SerializeField] private float _gemSoundCooldown = 0.05f; // 너무 잦은 재생 방지
 
+        [Header("Engine Sound Settings")]
+        [SerializeField, Range(1f, 2f)] private float _boostPitchBase = 1.4f;
+        [SerializeField, Range(0f, 1f)] private float _jitterIntensity = 0.1f;
+        [SerializeField, Range(0.1f, 10f)] private float _jitterFrequency = 2.0f;
+
         private float _lastGemSoundTime;
 
         private void Awake()
@@ -90,6 +95,7 @@ namespace Systems
 
         public void PlayPlayerDie()
         {
+            Debug.Log("[SoundManager] PlayPlayerDie Called");
             PlaySFX(_playerDieClip);
         }
 
@@ -102,32 +108,51 @@ namespace Systems
         /// 플레이어 이동/부스트 엔진음 제어
         /// </summary>
         /// <param name="isMoving">이동 중인지</param>
-        /// <param name="isBoosting">부스트 중인지</param>
+        /// <param name="isBoosting">부스트 중인지 (점수 부족 시 false)</param>
         public void UpdateEngineSound(bool isMoving, bool isBoosting)
         {
             if (_engineSource == null) return;
 
-            // 엔진 클립 할당 (최초 1회)
-            if (_engineSource.clip == null && _boostLoopClip != null)
+            // 엔진 클립 할당 및 재생 확인
+            if (_boostLoopClip != null)
             {
-                _engineSource.clip = _boostLoopClip;
-                _engineSource.Play();
+                if (_engineSource.clip != _boostLoopClip)
+                    _engineSource.clip = _boostLoopClip;
+                
+                if (!_engineSource.isPlaying)
+                    _engineSource.Play();
             }
 
             if (_boostLoopClip == null) return;
 
             float targetVolume = 0f;
-            float targetPitch = 1f;
+            float basePitch = 1.0f;
+            float jitter = 0f;
 
             if (isMoving)
             {
                 targetVolume = isBoosting ? 1f : 0.3f;
-                targetPitch = isBoosting ? 1.5f : 1.0f;
+                basePitch = isBoosting ? _boostPitchBase : 1.0f;
+
+                // 피로도 감소를 위한 미세한 피치 변동 (Perlin Noise)
+                // 시간 흐름에 따라 -0.5*Intensity ~ +0.5*Intensity 범위에서 흔들림
+                jitter = (Mathf.PerlinNoise(Time.time * _jitterFrequency, 0f) - 0.5f) * _jitterIntensity;
             }
 
             // 부드러운 전환
             _engineSource.volume = Mathf.Lerp(_engineSource.volume, targetVolume * _masterVolume, Time.deltaTime * 5f);
-            _engineSource.pitch = Mathf.Lerp(_engineSource.pitch, targetPitch, Time.deltaTime * 5f);
+            
+            // 피치 = 기본 피치 + 지터
+            float finalPitch = basePitch + jitter;
+            _engineSource.pitch = Mathf.Lerp(_engineSource.pitch, finalPitch, Time.deltaTime * 5f);
+        }
+
+        public void StopEngineSound()
+        {
+            if (_engineSource != null && _engineSource.isPlaying)
+            {
+                _engineSource.Stop();
+            }
         }
     }
 }

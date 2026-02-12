@@ -1602,6 +1602,7 @@ GameObject:
   - component: {fileID: 314640044}
   - component: {fileID: 314640046}
   - component: {fileID: 314640045}
+  - component: {fileID: 314640047}
   m_Layer: 0
   m_Name: Global
   m_TagString: Untagged
@@ -1649,6 +1650,31 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _settings: {fileID: 11400000, guid: 03800414d06d82242bebc81ab8e6a515, type: 2}
+--- !u!114 &314640047
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 314640042}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c53f912913ae55c4ea3303ced7291026, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _bgmSource: {fileID: 0}
+  _sfxSource: {fileID: 0}
+  _engineSource: {fileID: 0}
+  _mainBgm: {fileID: 8300000, guid: d4028894f5b017f4bb91b05bdd88e940, type: 3}
+  _gemCollectClip: {fileID: 8300000, guid: 8804980aac47fb940a5f8c326c02578e, type: 3}
+  _playerDieClip: {fileID: 8300000, guid: 5eba6e5e60960e44496787d5dde72da0, type: 3}
+  _gameStartClip: {fileID: 8300000, guid: 0fb7f2ee8d437cd4c901d80045cd0ca8, type: 3}
+  _boostLoopClip: {fileID: 8300000, guid: b177b771182eba449b3610c2bf68d2a4, type: 3}
+  _masterVolume: 1
+  _gemSoundCooldown: 0.05
+  _boostPitchBase: 1.4
+  _jitterIntensity: 0.153
+  _jitterFrequency: 2
 --- !u!1 &327080196
 GameObject:
   m_ObjectHideFlags: 0

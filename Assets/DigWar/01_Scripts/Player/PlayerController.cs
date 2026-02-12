@@ -59,8 +59,32 @@ namespace Player
             {
                 // 실제 이동 중인지 확인 (속도 > 0)
                 bool isMoving = CurrentSpeed > 0.1f;
-                Systems.SoundManager.Instance.UpdateEngineSound(isMoving, _isBoosting);
+                // 부스트는 입력(_isBoosting)과 점수(CurrentSpeed가 부스트 속도인지 확인하면 좋지만, 간단히 Score 체크)
+                // Move()에서 계산된 상태를 가져오는게 좋지만, 여기서는 로직 중복을 최소화하여 재계산
+                bool canBoost = _isBoosting && GameManager.Instance.CurrentScore > 0f;
+                Systems.SoundManager.Instance.UpdateEngineSound(isMoving, canBoost);
             }
+        }
+
+        private void OnEnable()
+        {
+            if (GameManager.Instance != null)
+                GameManager.Instance.OnPlayerDied += OnGlobalDeath;
+        }
+
+        private void OnDisable()
+        {
+            if (GameManager.Instance != null)
+                GameManager.Instance.OnPlayerDied -= OnGlobalDeath;
+        }
+
+        /// <summary>
+        /// GameManager에서 전파된 사망 이벤트 핸들러.
+        /// (MapBoundary 등 외부 요인으로 사망했을 때 처리를 위함)
+        /// </summary>
+        private void OnGlobalDeath()
+        {
+            if (!_isDead) Die();
         }
 
         private void HandleInput()
@@ -75,8 +99,9 @@ namespace Player
         private void Move()
         {
             float speed = _settings.BaseSpeed * transform.localScale.x;
+            bool canBoost = _isBoosting && GameManager.Instance.CurrentScore > 0f;
 
-            if (_isBoosting && GameManager.Instance.CurrentScore > 0f)
+            if (canBoost)
             {
                 speed *= _settings.BoostMultiplier;
                 float cost = _settings.BoostScoreCostPerSecond * Time.deltaTime;
@@ -154,8 +179,12 @@ namespace Player
                 GameManager.Instance.KillPlayer();
 
             // 사망 사운드 재생
+            // 사망 사운드 재생 및 엔진 정지
             if (Systems.SoundManager.Instance != null)
+            {
                 Systems.SoundManager.Instance.PlayPlayerDie();
+                Systems.SoundManager.Instance.StopEngineSound();
+            }
 
             // 터널 파괴
             var tunnel = GetComponent<Tunnel.TunnelGenerator>();

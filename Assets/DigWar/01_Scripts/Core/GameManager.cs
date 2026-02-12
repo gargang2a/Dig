@@ -11,6 +11,7 @@ namespace Core
     /// 점수, 게임 활성 여부 등 런타임 데이터를 보관하고
     /// 점수 변경 시 구독자에게 이벤트를 발행한다.
     /// </summary>
+    [DefaultExecutionOrder(-100)]
     public class GameManager : MonoBehaviour
     {
         public static GameManager Instance { get; private set; }

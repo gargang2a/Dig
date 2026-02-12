@@ -201,6 +201,14 @@ namespace Tunnel
 
         public void UpdateWidth(float newScale)
         {
+            if (_settings == null)
+            {
+                if (GameManager.Instance != null)
+                    _settings = GameManager.Instance.Settings;
+                
+                if (_settings == null) return;
+            }
+
             float width = newScale * _settings.TunnelWidthMultiplier;
             for (int i = 0; i < _segments.Count; i++)
             {
