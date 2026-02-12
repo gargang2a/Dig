@@ -52,7 +52,11 @@ namespace Systems
                 ? GameManager.Instance.CurrentScore : 0f;
 
             if (_scoreText != null)
-                _scoreText.text = $"최종 점수: {score:F0}";
+            {
+                string name = GameManager.Instance != null
+                    ? GameManager.Instance.PlayerName : "Player";
+                _scoreText.text = $"{name}\n최종 점수: {score:F0}";
+            }
 
             if (_panel != null)
                 _panel.SetActive(true);

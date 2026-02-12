@@ -10,6 +10,10 @@ namespace Tunnel
     [RequireComponent(typeof(LineRenderer))]
     public class TunnelSegment : MonoBehaviour
     {
+        // ── 공유 리소스 (static 캐시로 GC/GPU 부하 감소) ──
+        private static Texture2D s_circleTexture;
+        private static Shader s_spriteShader;
+
         private LineRenderer _lr;         // 채움 (앞)
         private LineRenderer _outlineLr;  // 외곽선 (뒤)
         private EdgeCollider2D _collider;
@@ -24,6 +28,9 @@ namespace Tunnel
         private float _tunnelWidth;
         private Color _debrisColor;
 
+        // GC 감소: collider points 배열 캐시
+        private Vector2[] _colliderArray;
+
         public int PointCount => _points.Count;
 
         /// <summary>첫 번째 포인트(꼬리 끝) 위치 반환. 젬 드롭 용.</summary>
@@ -32,22 +39,23 @@ namespace Tunnel
             return _points.Count > 0 ? _points[0] : Vector3.zero;
         }
 
-        public void Initialize(Material material, Color fillColor, Color outlineColor,
-            float width, Texture2D tunnelTexture = null)
+        public void Initialize(Material material, Color fillColor, Color outlineColor, float width)
         {
             _tunnelWidth = width;
             _debrisColor = outlineColor;
+
+            EnsureSharedResources();
 
             // --- 외곽선 LineRenderer (뒤쪽, 더 넓음, 단색) ---
             var outlineObj = new GameObject("Outline");
             outlineObj.transform.SetParent(transform, false);
             _outlineLr = outlineObj.AddComponent<LineRenderer>();
-            SetupLineRenderer(_outlineLr, material, outlineColor,
+            SetupLineRenderer(_outlineLr, outlineColor,
                 width * 1.5f, sortingOrder: -2, corners: 8, caps: 4);
 
             // --- 채움 LineRenderer (앞쪽) ---
             _lr = GetComponent<LineRenderer>();
-            SetupLineRenderer(_lr, material, fillColor,
+            SetupLineRenderer(_lr, fillColor,
                 width, sortingOrder: -1, corners: 8, caps: 4);
 
             // --- 콜라이더 ---
@@ -68,6 +76,21 @@ namespace Tunnel
             Initialize(material, color, outline, width);
         }
 
+        // ── 정적 리소스 초기화 (한 번만 실행) ──
+        private static void EnsureSharedResources()
+        {
+            if (s_spriteShader == null)
+            {
+                s_spriteShader = Shader.Find("Sprites/Default");
+                if (s_spriteShader == null)
+                    s_spriteShader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+            }
+
+            if (s_circleTexture == null)
+                s_circleTexture = CreateCircleTexture(32);
+        }
+
+        // ── 데브리 파티클 시스템 ──
         private void CreateDebrisParticleSystem(Color color)
         {
             var psObj = new GameObject("Debris");
@@ -77,31 +100,29 @@ namespace Tunnel
 
             // 수동 Emit만 사용 (자동 방출 없음)
             var main = _debrisPS.main;
-            main.startLifetime = 999f; // 영구 지속
-            main.startSpeed = 0f;       // 움직이지 않음
+            main.startLifetime = 999f;
+            main.startSpeed = 0f;
             main.startSize = new ParticleSystem.MinMaxCurve(
                 _tunnelWidth * 0.15f, _tunnelWidth * 0.4f);
             main.startColor = new ParticleSystem.MinMaxGradient(
                 color,
-                color * 1.3f  // 약간 밝은 변형
+                color * 1.3f
             );
             main.startRotation = new ParticleSystem.MinMaxCurve(0f, 360f * Mathf.Deg2Rad);
             main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.maxParticles = 2000;
+            main.maxParticles = 800;
             main.playOnAwake = false;
 
-            // 자동 방출 끄기
             var emission = _debrisPS.emission;
             emission.rateOverTime = 0f;
 
-            // Shape 끄기 (수동 위치 지정)
             var shape = _debrisPS.shape;
             shape.enabled = false;
 
-            // Renderer: 런타임 원형 텍스처 생성
+            // Renderer: 공유 원형 텍스처 사용
             var renderer = psObj.GetComponent<ParticleSystemRenderer>();
-            var circleMat = new Material(Shader.Find("Sprites/Default"));
-            circleMat.mainTexture = CreateCircleTexture(32);
+            var circleMat = new Material(s_spriteShader);
+            circleMat.mainTexture = s_circleTexture;
             renderer.material = circleMat;
             renderer.sortingOrder = 0;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
@@ -109,33 +130,28 @@ namespace Tunnel
             _debrisPS.Stop();
         }
 
-        /// <summary>
-        /// 터널 경로의 양옆에 흙 덩어리 파티클을 흩뿌린다.
-        /// </summary>
+        /// <summary>터널 가장자리에 흙 덩어리 파티클을 흩뿌린다.</summary>
         private void EmitDebris(Vector3 pos, Vector3 direction)
         {
             if (_debrisPS == null) return;
 
-            // 진행 방향의 수직 벡터
             Vector3 perpendicular = new Vector3(-direction.y, direction.x, 0f).normalized;
-            float halfWidth = _tunnelWidth * 0.5f;
+            float outerEdge = _tunnelWidth * 0.75f; // 외곽선 반경 바깥
 
-            // 양쪽에 1~2개씩 흩뿌리기
             int count = Random.Range(2, 4);
             var emitParams = new ParticleSystem.EmitParams();
 
             for (int i = 0; i < count; i++)
             {
-                // 터널 가장자리 + 약간 랜덤 오프셋
                 float side = (i % 2 == 0) ? 1f : -1f;
-                float offset = halfWidth * Random.Range(0.9f, 1.5f);
+                float offset = outerEdge + _tunnelWidth * Random.Range(0.05f, 0.3f);
 
                 emitParams.position = pos + perpendicular * (side * offset);
                 emitParams.velocity = Vector3.zero;
                 emitParams.startSize = _tunnelWidth * Random.Range(0.2f, 0.5f);
                 emitParams.startLifetime = 999f;
 
-                // 색상 살짝 변동
+                // 색상 미세 변동
                 Color c = _debrisColor;
                 float v = Random.Range(-0.08f, 0.08f);
                 c.r = Mathf.Clamp01(c.r + v);
@@ -147,17 +163,11 @@ namespace Tunnel
             }
         }
 
-        private void SetupLineRenderer(LineRenderer lr, Material mat,
+        // ── LineRenderer 설정 ──
+        private void SetupLineRenderer(LineRenderer lr,
             Color color, float width, int sortingOrder, int corners, int caps)
         {
-            var shader = Shader.Find("Sprites/Default");
-            if (shader == null)
-                shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
-            if (shader == null && mat != null)
-                shader = mat.shader;
-
-            var instanceMat = new Material(shader);
-
+            var instanceMat = new Material(s_spriteShader);
             lr.material = instanceMat;
             lr.startColor = color;
             lr.endColor = color;
@@ -179,6 +189,7 @@ namespace Tunnel
             );
         }
 
+        // ── 포인트 관리 ──
         public void AddPoint(Vector3 worldPos)
         {
             _points.Add(worldPos);
@@ -209,9 +220,7 @@ namespace Tunnel
             }
         }
 
-        /// <summary>
-        /// 매 프레임 호출. LineRenderer 맨 끝을 플레이어 위치에 고정.
-        /// </summary>
+        /// <summary>매 프레임 호출. LineRenderer 맨 끝을 플레이어 위치에 고정.</summary>
         public void UpdateLiveHead(Vector3 playerPos)
         {
             if (_lr.positionCount > 0)
@@ -261,10 +270,19 @@ namespace Tunnel
                 SyncCollider();
         }
 
+        // ── Collider 동기화 (GC 감소: 배열 캐시) ──
         private void SyncCollider()
         {
-            if (_colliderPoints.Count >= 2)
-                _collider.points = _colliderPoints.ToArray();
+            int count = _colliderPoints.Count;
+            if (count < 2) return;
+
+            if (_colliderArray == null || _colliderArray.Length != count)
+                _colliderArray = new Vector2[count];
+
+            for (int i = 0; i < count; i++)
+                _colliderArray[i] = _colliderPoints[i];
+
+            _collider.points = _colliderArray;
         }
 
         public void FlushCollider() => SyncCollider();
@@ -292,7 +310,10 @@ namespace Tunnel
             if (_collider != null)
                 _collider.edgeRadius = width * 0.5f;
         }
-        /// <summary>런타임에 원형 텍스처를 생성한다.</summary>
+
+        // ── 유틸리티 ──
+
+        /// <summary>런타임에 원형 텍스처를 생성한다 (static 캐시).</summary>
         private static Texture2D CreateCircleTexture(int size)
         {
             var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
@@ -306,8 +327,6 @@ namespace Tunnel
                     float dx = x - center + 0.5f;
                     float dy = y - center + 0.5f;
                     float dist = Mathf.Sqrt(dx * dx + dy * dy);
-
-                    // 부드러운 가장자리 (1px 안티앨리어싱)
                     float alpha = Mathf.Clamp01(radius - dist + 0.5f);
                     tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
                 }

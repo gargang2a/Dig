@@ -13,16 +13,10 @@ namespace Systems
         [Header("References")]
         [SerializeField] private Transform _playerTransform;
         [SerializeField] private Camera _mainCamera;
-
-        [Header("Smoothing")]
-        [SerializeField, Range(0.01f, 2f)] private float _scaleSmoothTime = 0.5f;
         [SerializeField, Range(0.01f, 2f)] private float _zoomSmoothTime = 0.5f;
 
         private GameSettings _settings;
-        private Tunnel.TunnelGenerator _tunnelGenerator;
-        private float _scaleVelocity;
         private float _zoomVelocity;
-        private float _targetScale;
         private float _targetZoom;
 
         private void Start()
@@ -35,56 +29,30 @@ namespace Systems
             }
 
             _settings = GameManager.Instance.Settings;
-            _tunnelGenerator = FindObjectOfType<Tunnel.TunnelGenerator>();
-            GameManager.Instance.OnScoreChanged += OnScoreChanged;
-
-            OnScoreChanged(GameManager.Instance.CurrentScore);
-
-            if (_playerTransform != null)
-                _playerTransform.localScale = new Vector3(_targetScale, _targetScale, 1f);
-
-            if (_mainCamera != null)
-                _mainCamera.orthographicSize = _targetZoom;
-        }
-
-        private void OnDestroy()
-        {
-            if (GameManager.Instance != null)
-                GameManager.Instance.OnScoreChanged -= OnScoreChanged;
-        }
-
-        private void LateUpdate()
-        {
-            if (_playerTransform == null) return;
-
-            float scale = Mathf.SmoothDamp(
-                _playerTransform.localScale.x, _targetScale,
-                ref _scaleVelocity, _scaleSmoothTime
-            );
-            _playerTransform.localScale = new Vector3(scale, scale, 1f);
-
-            // 터널 너비도 플레이어 스케일에 동기화
-            if (_tunnelGenerator != null)
-                _tunnelGenerator.UpdateWidth(scale);
 
             if (_mainCamera != null)
             {
-                _mainCamera.orthographicSize = Mathf.SmoothDamp(
-                    _mainCamera.orthographicSize, _targetZoom,
-                    ref _zoomVelocity, _zoomSmoothTime
-                );
+                // 초기 줌 설정
+                float initialScale = _settings.MinScale;
+                _targetZoom = _settings.BaseCameraZoom + initialScale * _settings.CameraZoomPerScale;
+                _mainCamera.orthographicSize = _targetZoom;
             }
         }
 
-        private void OnScoreChanged(float score)
+
+
+        private void LateUpdate()
         {
-            float growth = Mathf.Log(1f + score / _settings.ScorePerSizeUnit);
-            _targetScale = Mathf.Clamp(
-                _settings.MinScale + growth,
-                _settings.MinScale,
-                _settings.MaxScale
+            if (_playerTransform == null || _mainCamera == null) return;
+
+            // 플레이어의 현재 스케일(MoleGrowth가 제어)을 기준으로 목표 줌 계산
+            float currentScale = _playerTransform.localScale.x;
+            _targetZoom = _settings.BaseCameraZoom + currentScale * _settings.CameraZoomPerScale;
+
+            _mainCamera.orthographicSize = Mathf.SmoothDamp(
+                _mainCamera.orthographicSize, _targetZoom,
+                ref _zoomVelocity, _zoomSmoothTime
             );
-            _targetZoom = _settings.BaseCameraZoom + _targetScale * _settings.CameraZoomPerScale;
         }
 
 #if UNITY_EDITOR

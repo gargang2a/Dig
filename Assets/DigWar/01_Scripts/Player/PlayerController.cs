@@ -10,10 +10,13 @@ namespace Player
     /// 카메라 추적과의 프레임 불일치가 발생하지 않는다.
     /// </summary>
     [RequireComponent(typeof(Rigidbody2D))]
+    [RequireComponent(typeof(Core.MoleGrowth))]
     public class PlayerController : MonoBehaviour, IDigger
     {
         [Header("References")]
         [SerializeField] private Transform _visualRoot;
+
+        private Core.MoleGrowth _growth;
 
         private Camera _mainCamera;
         private GameSettings _settings;
@@ -25,6 +28,8 @@ namespace Player
         {
             _rb = GetComponent<Rigidbody2D>();
             _rb.bodyType = RigidbodyType2D.Kinematic;
+            _growth = GetComponent<Core.MoleGrowth>();
+            if (_growth == null) _growth = gameObject.AddComponent<Core.MoleGrowth>();
         }
 
         private void Start()
@@ -48,6 +53,14 @@ namespace Player
             HandleInput();
             Rotate();
             Move();
+
+            // 사운드 업데이트
+            if (Systems.SoundManager.Instance != null)
+            {
+                // 실제 이동 중인지 확인 (속도 > 0)
+                bool isMoving = CurrentSpeed > 0.1f;
+                Systems.SoundManager.Instance.UpdateEngineSound(isMoving, _isBoosting);
+            }
         }
 
         private void HandleInput()
@@ -66,7 +79,11 @@ namespace Player
             if (_isBoosting && GameManager.Instance.CurrentScore > 0f)
             {
                 speed *= _settings.BoostMultiplier;
-                GameManager.Instance.AddScore(-_settings.BoostScoreCostPerSecond * Time.deltaTime);
+                float cost = _settings.BoostScoreCostPerSecond * Time.deltaTime;
+                
+                // 전역 점수(UI)와 성장 점수(크기) 모두 차감
+                GameManager.Instance.AddScore(-cost);
+                if (_growth != null) _growth.AddScore(-cost);
             }
 
             CurrentSpeed = speed;
@@ -114,6 +131,19 @@ namespace Player
                 Die();
         }
 
+        /// <summary>
+        /// 젬 획득 시 호출 (IDigger 구현).
+        /// 전역 점수와 성장 점수를 모두 증가시킨다.
+        /// </summary>
+        public void AddScore(float amount)
+        {
+            if (GameManager.Instance != null)
+                GameManager.Instance.AddScore(amount);
+
+            if (_growth != null)
+                _growth.AddScore(amount);
+        }
+
         private void Die()
         {
             _isDead = true;
@@ -122,6 +152,10 @@ namespace Player
             // GameManager에 사망 알림
             if (GameManager.Instance != null)
                 GameManager.Instance.KillPlayer();
+
+            // 사망 사운드 재생
+            if (Systems.SoundManager.Instance != null)
+                Systems.SoundManager.Instance.PlayPlayerDie();
 
             // 터널 파괴
             var tunnel = GetComponent<Tunnel.TunnelGenerator>();

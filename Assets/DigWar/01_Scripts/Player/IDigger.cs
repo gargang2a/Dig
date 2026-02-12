@@ -8,5 +8,6 @@ namespace Player
     {
         float CurrentSpeed { get; }
         bool IsBoosting { get; }
+        void AddScore(float amount);
     }
 }

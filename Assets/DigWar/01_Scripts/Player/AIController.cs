@@ -10,6 +10,7 @@ namespace Player
     /// 행동 패턴: 평소 랜덤 이동, 근처 젬 감지 시 추적, 벽 근처에서 회피.
     /// </summary>
     [RequireComponent(typeof(Rigidbody2D))]
+    [RequireComponent(typeof(Core.MoleGrowth))]
     public class AIController : MonoBehaviour, IDigger
     {
         private GameSettings _settings;
@@ -26,8 +27,11 @@ namespace Player
         public float CurrentSpeed { get; private set; }
         public bool IsBoosting => false; // 봇은 부스트 안 함 (단순화)
 
-        // 봇 점수 (독립 관리)
-        public float Score { get; private set; }
+
+
+        public float Score => _growth != null ? _growth.CurrentScore : 0f;
+
+        private Core.MoleGrowth _growth;
 
         private const float ANGLE_CHANGE_INTERVAL = 1.5f;
         private const float GEM_SEARCH_INTERVAL = 0.5f;
@@ -38,6 +42,7 @@ namespace Player
         {
             _rb = GetComponent<Rigidbody2D>();
             _rb.bodyType = RigidbodyType2D.Kinematic;
+            _growth = GetComponent<Core.MoleGrowth>();
         }
 
         private void Start()
@@ -156,7 +161,8 @@ namespace Player
         /// </summary>
         public void AddScore(float amount)
         {
-            Score = Mathf.Max(0f, Score + amount);
+            if (_growth != null)
+                _growth.AddScore(amount);
         }
 
         private void OnTriggerEnter2D(Collider2D other)

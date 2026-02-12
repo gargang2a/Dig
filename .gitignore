@@ -100,3 +100,5 @@ InitTestScene*.unity*
 
 # Personal Asset
 /[Aa]ssets/[Tt]hirdParty
+# Documentation
+Docs/

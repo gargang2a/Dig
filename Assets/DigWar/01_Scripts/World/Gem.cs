@@ -192,27 +192,30 @@ namespace World
 
         private void OnTriggerEnter2D(Collider2D other)
         {
-            // 플레이어 수집
-            if (other.GetComponent<Player.PlayerController>() != null)
+            // IDigger 인터페이스를 통한 통합 처리 (Player & AI)
+            var digger = other.GetComponent<Player.IDigger>();
+            if (digger != null)
             {
-                Collect(true);
-                return;
-            }
-
-            // AI 봇 수집 (점수는 봇 독립 관리)
-            var ai = other.GetComponent<Player.AIController>();
-            if (ai != null)
-            {
-                ai.AddScore(GameManager.Instance != null
-                    ? GameManager.Instance.Settings.GemScore : 10f);
-                Collect(false);
+                float score = GameManager.Instance != null 
+                    ? GameManager.Instance.Settings.GemScore 
+                    : 10f;
+                
+                digger.AddScore(score);
+                
+                // 플레이어 여부 확인 (사운드용)
+                bool isPlayer = other.GetComponent<Player.PlayerController>() != null;
+                Collect(isPlayer);
             }
         }
 
         private void Collect(bool isPlayer = true)
         {
-            if (isPlayer && GameManager.Instance != null)
-                GameManager.Instance.AddScore(GameManager.Instance.Settings.GemScore);
+            // 플레이어일 경우 사운드 재생 (점수는 IDigger.AddScore에서 처리됨)
+            if (isPlayer)
+            {
+                if (Systems.SoundManager.Instance != null)
+                    Systems.SoundManager.Instance.PlayGemCollect();
+            }
 
             if (_spawner == null)
                 _spawner = FindObjectOfType<GemSpawner>();

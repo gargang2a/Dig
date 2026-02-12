@@ -4,7 +4,7 @@ namespace Player
 {
     /// <summary>
     /// 두더지가 이동 중일 때 머리 앞쪽에 흙 파편 파티클을 방출한다.
-    /// PlayerController와 같은 오브젝트에 추가한다.
+    /// PlayerController/AIController와 같은 오브젝트에 추가한다.
     /// </summary>
     public class DiggingParticle : MonoBehaviour
     {
@@ -17,6 +17,7 @@ namespace Player
         private ParticleSystem _ps;
         private ParticleSystem.EmissionModule _emission;
         private IDigger _digger;
+        private float _lastScale = -1f; // scale 변경 감지용
 
         private void Start()
         {
@@ -38,20 +39,26 @@ namespace Player
                 rate *= _boostEmissionMultiplier;
             _emission.rateOverTime = rate;
 
-            // 크기에 비례하여 파티클 스케일 조정
-            var main = _ps.main;
-            main.startSize = new ParticleSystem.MinMaxCurve(0.05f * scale, 0.15f * scale);
-            main.startSpeed = new ParticleSystem.MinMaxCurve(1f * scale, 3f * scale);
+            // scale이 변경되었을 때만 파티클 속성 업데이트 (GC 감소)
+            if (!Mathf.Approximately(scale, _lastScale))
+            {
+                _lastScale = scale;
 
-            // 발사 위치도 스케일에 맞게
-            _ps.transform.localPosition = new Vector3(0f, 0.5f * scale, 0f);
+                var main = _ps.main;
+                main.startSize = new ParticleSystem.MinMaxCurve(0.05f * scale, 0.15f * scale);
+                main.startSpeed = new ParticleSystem.MinMaxCurve(1f * scale, 3f * scale);
+                _ps.transform.localPosition = new Vector3(0f, 0.5f * scale, 0f);
+
+                // Shape radius도 스케일에 비례
+                var shape = _ps.shape;
+                shape.radius = 0.15f * scale;
+            }
         }
 
         private void CreateParticleSystem()
         {
             var psObj = new GameObject("DiggingDust");
             psObj.transform.SetParent(transform, false);
-            // 머리 방향(Y+) 앞쪽에 배치
             psObj.transform.localPosition = new Vector3(0f, 0.5f, 0f);
 
             _ps = psObj.AddComponent<ParticleSystem>();
@@ -76,7 +83,6 @@ namespace Player
             shape.shapeType = ParticleSystemShapeType.Cone;
             shape.angle = 35f;
             shape.radius = 0.15f;
-            // 로컬 Y+ (전방)에서 방출
             shape.rotation = new Vector3(-90f, 0f, 0f);
 
             // Size over Lifetime: 점점 작아짐
@@ -98,9 +104,11 @@ namespace Player
             );
             col.color = grad;
 
-            // Renderer 설정
+            // Renderer: Shader를 TunnelSegment의 static 캐시와 동일하게 사용
+            var shader = Shader.Find("Sprites/Default")
+                ?? Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
             var renderer = psObj.GetComponent<ParticleSystemRenderer>();
-            renderer.material = new Material(Shader.Find("Sprites/Default"));
+            renderer.material = new Material(shader);
             renderer.sortingOrder = 15;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
         }

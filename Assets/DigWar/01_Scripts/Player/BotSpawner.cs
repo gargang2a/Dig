@@ -53,6 +53,7 @@ namespace Player
             var botObj = new GameObject($"Bot_{index}");
             botObj.transform.position = new Vector3(randomPos.x, randomPos.y, 0f);
             botObj.transform.rotation = Quaternion.Euler(0f, 0f, Random.Range(0f, 360f));
+            botObj.transform.localScale = Vector3.one * _settings.MinScale;
             botObj.layer = gameObject.layer;
 
             // Rigidbody2D (AIController/TunnelGenerator 요구)
@@ -90,14 +91,18 @@ namespace Player
             // AI 컨트롤러
             botObj.AddComponent<AIController>();
 
+            // 성장 컴포넌트 (점수 기반 크기 조절)
+            botObj.AddComponent<Core.MoleGrowth>();
+
             // 먼지 파티클
             botObj.AddComponent<DiggingParticle>();
 
             // 터널 생성기
             var tunnel = botObj.AddComponent<Tunnel.TunnelGenerator>();
 
-            // 봇별 터널 색상 설정
+            // 봇별 터널 색상: 채도를 낮춰 흙 느낌으로
             Color tunnelColor = botColor * 0.6f;
+            tunnelColor = Color.Lerp(tunnelColor, new Color(0.45f, 0.3f, 0.18f), 0.5f); // 흙색 혼합
             tunnelColor.a = 1f;
             tunnel.SetTunnelVisuals(_tunnelMaterial, tunnelColor);
         }

@@ -22,9 +22,11 @@ namespace Systems
 
         [Header("미니맵 (우측 하단)")]
         [SerializeField] private RectTransform _minimapRoot;
+        public RectTransform MinimapRoot => _minimapRoot;
         [SerializeField] private Image _playerDot;
         [SerializeField] private Image[] _botDots = new Image[8];
         [SerializeField] private float _minimapUsableRadius = 65f;
+        public float MinimapUsableRadius => _minimapUsableRadius;
 
         // 색상
         private static readonly Color COLOR_FIRST = new Color(1f, 0.65f, 0.2f);   // 주황 (1위)
@@ -65,6 +67,18 @@ namespace Systems
             }
         }
 
+        private void Start()
+        {
+            // 미니맵 렌더러 자동 부착
+            if (GetComponent<MinimapRenderer>() == null)
+                gameObject.AddComponent<MinimapRenderer>();
+
+            // 메인 메뉴 자동 부착
+            if (FindObjectOfType<MainMenuUI>() == null)
+                gameObject.AddComponent<MainMenuUI>();
+        }
+
+
         // ===== LEADERBOARD =====
         private void UpdateLeaderboard()
         {
@@ -74,7 +88,7 @@ namespace Systems
                 ? GameManager.Instance.CurrentScore : 0f;
             _entries.Add(new LeaderboardEntry
             {
-                Name = "You", Score = playerScore,
+                Name = GameManager.Instance.PlayerName, Score = playerScore,
                 DotColor = Color.white, IsPlayer = true
             });
 

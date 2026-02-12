@@ -21,9 +21,11 @@ namespace Core
 
         public float CurrentScore { get; private set; }
         public bool IsGameActive { get; private set; }
+        public string PlayerName { get; set; } = "Player";
 
         public event System.Action<float> OnScoreChanged;
         public event System.Action OnPlayerDied;
+        public event System.Action OnGameStarted;
 
         private void Awake()
         {
@@ -37,16 +39,17 @@ namespace Core
             DontDestroyOnLoad(gameObject);
         }
 
-        private void Start()
-        {
-            StartGame();
-        }
+        // 메인 메뉴가 StartGame()을 호출할 때까지 대기
 
         public void StartGame()
         {
             CurrentScore = 0f;
             IsGameActive = true;
             OnScoreChanged?.Invoke(CurrentScore);
+            OnGameStarted?.Invoke();
+
+            if (Systems.SoundManager.Instance != null)
+                Systems.SoundManager.Instance.PlayGameStart();
         }
 
         /// <summary>
