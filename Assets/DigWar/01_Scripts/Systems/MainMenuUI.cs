@@ -31,6 +31,10 @@ namespace Systems
             if (_nameInput != null)
             {
                 _nameInput.characterLimit = 12;
+
+                // 이전 이름이 있다면 입력창에 채워넣기
+                if (GameManager.Instance != null && !string.IsNullOrEmpty(GameManager.Instance.PlayerName))
+                    _nameInput.text = GameManager.Instance.PlayerName;
             }
 
             if (_playButton != null)

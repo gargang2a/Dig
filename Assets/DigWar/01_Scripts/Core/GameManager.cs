@@ -22,7 +22,7 @@ namespace Core
 
         public float CurrentScore { get; private set; }
         public bool IsGameActive { get; private set; }
-        public string PlayerName { get; set; } = "Player";
+        public string PlayerName { get; set; } = "";
 
         public event System.Action<float> OnScoreChanged;
         public event System.Action OnPlayerDied;

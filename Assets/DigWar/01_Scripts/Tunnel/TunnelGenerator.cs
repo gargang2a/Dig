@@ -30,6 +30,9 @@ namespace Tunnel
         private bool _hasFirstPoint;
         private int _totalPointCount;
 
+        // Object Pooling
+        private readonly Queue<TunnelSegment> _segmentPool = new Queue<TunnelSegment>();
+
         public int TotalPointCount => _totalPointCount;
         public int SegmentCount => _segments.Count;
 
@@ -162,7 +165,9 @@ namespace Tunnel
                 if (oldest != _currentSegment && oldest.PointCount < 2)
                 {
                     _segments.RemoveAt(0);
-                    Destroy(oldest.gameObject);
+                    // Destroy 대신 풀링 반환
+                    oldest.gameObject.SetActive(false);
+                    _segmentPool.Enqueue(oldest);
                 }
             }
 
@@ -171,18 +176,33 @@ namespace Tunnel
             {
                 oldest = _segments[0];
                 if (oldest.PointCount >= 2 && _tailLerp > 0f)
+                {
                     oldest.SlideTailPoint(Mathf.Min(_tailLerp, 1f));
+                }
             }
         }
 
         private void CreateNewSegment()
         {
             float width = transform.localScale.x * _settings.TunnelWidthMultiplier;
+            TunnelSegment segment = null;
 
-            var obj = new GameObject($"TunnelSegment_{_segments.Count}");
-            obj.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            // 풀에서 가져오기
+            if (_segmentPool.Count > 0)
+            {
+                segment = _segmentPool.Dequeue();
+                segment.gameObject.SetActive(true);
+            }
+            else
+            {
+                var obj = new GameObject($"TunnelSegment_{Random.Range(0, 10000)}"); // 이름 랜덤화는 디버그용
+                segment = obj.AddComponent<TunnelSegment>();
+            }
 
-            var segment = obj.AddComponent<TunnelSegment>();
+            // 위치 초기화는 Transform만
+            segment.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            
+            // Initialize 내부에서 재사용(UpdateVisuals + Reset) 처리
             segment.Initialize(_tunnelMaterial, _tunnelColor, _outlineColor, width);
 
             _segments.Add(segment);
@@ -222,7 +242,10 @@ namespace Tunnel
             for (int i = 0; i < _segments.Count; i++)
             {
                 if (_segments[i] != null)
-                    Destroy(_segments[i].gameObject);
+                {
+                    _segments[i].gameObject.SetActive(false);
+                    _segmentPool.Enqueue(_segments[i]);
+                }
             }
             _segments.Clear();
             _totalPointCount = 0;
