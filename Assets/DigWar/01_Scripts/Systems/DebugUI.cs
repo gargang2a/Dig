@@ -74,12 +74,14 @@ namespace Systems
                 Label($"부스트 속도: <color=orange>{boostSpeed:F1}</color>");
             }
 
-            // 터널 정보
+            // 터널 정보 (Mask System에서는 세그먼트 개수 개념 없음)
+            /*
             if (_tunnel != null)
             {
                 Label($"터널 포인트: <color=lime>{_tunnel.TotalPointCount}</color>");
                 Label($"터널 세그먼트: <color=lime>{_tunnel.SegmentCount}</color>");
             }
+            */
 
             // 카메라 줌
             if (Camera.main != null)

@@ -4,20 +4,20 @@ using UnityEngine;
 namespace Tunnel
 {
     /// <summary>
-    /// 터널 한 구간. 이중 LineRenderer(외곽선 + 채움) + EdgeCollider2D.
-    /// 포인트 추가 시 양옆에 흙 덩어리 파티클을 흩뿌려 자연스러운 테두리를 만든다.
+    /// ?�널 ??구간. ?�중 LineRenderer(?�곽??+ 채�?) + EdgeCollider2D.
+    /// ?�인??추�? ???�옆?????�어�??�티?�을 ?�뿌???�연?�러???�두리�? 만든??
     /// </summary>
     [RequireComponent(typeof(LineRenderer))]
-    public class TunnelSegment : MonoBehaviour
+    public class TunnelSegment_Legacy : MonoBehaviour
     {
-        // ── 공유 리소스 (static 캐시로 GC/GPU 부하 감소) ──
+        // ?�?� 공유 리소??(static 캐시�?GC/GPU 부??감소) ?�?�
         private static Texture2D s_circleTexture;
-        private static Texture2D s_shadowTexture; // 세로 그라데이션 텍스처
+        private static Texture2D s_shadowTexture; // ?�로 그라?�이???�스�?
         private static Shader s_spriteShader;
 
-        private LineRenderer _lr;         // 채움 (앞)
-        private LineRenderer _shadowLr;   // 그림자 (중간)
-        private LineRenderer _outlineLr;  // 외곽선 (뒤)
+        private LineRenderer _lr;         // 채�? (??
+        private LineRenderer _shadowLr;   // 그림??(중간)
+        private LineRenderer _outlineLr;  // ?�곽??(??
         private EdgeCollider2D _collider;
         private readonly List<Vector3> _points = new List<Vector3>(200);
         private readonly List<Vector2> _colliderPoints = new List<Vector2>(200);
@@ -25,7 +25,7 @@ namespace Tunnel
         private int _dirtyCount;
         private const int COLLIDER_SYNC_INTERVAL = 5;
 
-        // 데브리 파티클
+        // ?�브�??�티??
         private ParticleSystem _debrisPS;
         private float _tunnelWidth;
         private Color _debrisColor;
@@ -35,7 +35,7 @@ namespace Tunnel
 
         public int PointCount => _points.Count;
 
-        /// <summary>첫 번째 포인트(꼬리 끝) 위치 반환. 젬 드롭 용.</summary>
+        /// <summary>�?번째 ?�인??꼬리 ?? ?�치 반환. ???�롭 ??</summary>
         public Vector3 GetFirstPointPosition()
         {
             return _points.Count > 0 ? _points[0] : Vector3.zero;
@@ -48,59 +48,59 @@ namespace Tunnel
             _tunnelWidth = width;
             _debrisColor = outlineColor;
 
-            // 이미 초기화된 경우(풀링 재사용), 설정만 업데이트하고 리턴
+            // ?��? 초기?�된 경우(?��??�사??, ?�정�??�데?�트?�고 리턴
             if (_isInitialized)
             {
                 UpdateVisuals(material, fillColor, outlineColor, width);
-                Reset(); // 상태 초기화
+                Reset(); // ?�태 초기??
                 return;
             }
 
             EnsureSharedResources();
 
-            // --- 외곽선 LineRenderer (뒤쪽, 더 넓음, 단색) ---
+            // --- ?�곽??LineRenderer (?�쪽, ???�음, ?�색) ---
             var outlineObj = new GameObject("Outline");
             outlineObj.transform.SetParent(transform, false);
             _outlineLr = outlineObj.AddComponent<LineRenderer>();
-            // 1.3배 -> 1.2배로 더 줄임 (테두리 두께 최소화)
+            // 1.3�?-> 1.2배로 ??줄임 (?�두�??�께 최소??
             SetupLineRenderer(_outlineLr, outlineColor,
                 width * 1.2f, sortingOrder: -2, corners: 8, caps: 4);
 
-            // --- 그림자 LineRenderer (중간, 그라데이션) ---
+            // --- 그림??LineRenderer (중간, 그라?�이?? ---
             var shadowObj = new GameObject("Shadow");
             shadowObj.transform.SetParent(transform, false);
             _shadowLr = shadowObj.AddComponent<LineRenderer>();
             
-            // 그림자 재질 (흰색 그라데이션 텍스처 + 검정 틴트)
+            // 그림???�질 (?�색 그라?�이???�스�?+ 검???�트)
             var shadowMat = new Material(s_spriteShader);
             shadowMat.mainTexture = s_shadowTexture;
             _shadowLr.material = shadowMat;
             
-            // 검정색 (알파값으로 진하기 조절)
+            // 검?�색 (?�파값으�?진하�?조절)
             Color shadowColor = new Color(0f, 0f, 0f, 0.6f); 
             SetupLineRenderer(_shadowLr, shadowColor,
                 width, sortingOrder: -1, corners: 8, caps: 4, isShadow: true);
 
-            // --- 채움 LineRenderer (앞쪽, 기본 색상) ---
+            // --- 채�? LineRenderer (?�쪽, 기본 ?�상) ---
             _lr = GetComponent<LineRenderer>();
             SetupLineRenderer(_lr, fillColor,
                 width, sortingOrder: -1, corners: 8, caps: 4); 
             _shadowLr.sortingOrder = 0; 
             _lr.sortingOrder = -1;
 
-            // --- 콜라이더 ---
+            // --- 콜라?�더 ---
             _collider = gameObject.AddComponent<EdgeCollider2D>();
             _collider.edgeRadius = width * 0.5f;
             _collider.isTrigger = true;
             _collider.enabled = false;
 
-            // --- 데브리 파티클 ---
+            // --- ?�브�??�티??---
             CreateDebrisParticleSystem(outlineColor);
 
             _isInitialized = true;
         }
 
-        /// <summary>풀링 재사용을 위한 상태 초기화</summary>
+        /// <summary>?��??�사?�을 ?�한 ?�태 초기??/summary>
         public void Reset()
         {
             _points.Clear();
@@ -117,7 +117,7 @@ namespace Tunnel
             }
 
             _dirtyCount = 0;
-            // 활성화
+            // ?�성??
             gameObject.SetActive(true);
         }
 
@@ -129,7 +129,7 @@ namespace Tunnel
                 _lr.endColor = fillColor;
                 _lr.startWidth = width;
                 _lr.endWidth = width;
-                // Material은 공유되므로 인스턴스화 주의 (여기서는 유지)
+                // Material?� 공유?��?�??�스?�스??주의 (?�기?�는 ?��?)
             }
 
             if (_outlineLr != null)
@@ -157,7 +157,7 @@ namespace Tunnel
             }
         }
 
-        // 하위호환: 이전 시그니처 지원
+        // ?�위?�환: ?�전 ?�그?�처 지??
         public void Initialize(Material material, Color color, float width)
         {
             Color outline = color * 0.5f;
@@ -165,7 +165,7 @@ namespace Tunnel
             Initialize(material, color, outline, width);
         }
 
-        // ── 정적 리소스 초기화 (한 번만 실행) ──
+        // ?�?� ?�적 리소??초기??(??번만 ?�행) ?�?�
         private static void EnsureSharedResources()
         {
             if (s_spriteShader == null)
@@ -182,7 +182,7 @@ namespace Tunnel
                 s_shadowTexture = CreateShadowTexture(64, 32);
         }
 
-        // ── 데브리 파티클 시스템 ──
+        // ?�?� ?�브�??�티???�스???�?�
         private void CreateDebrisParticleSystem(Color color)
         {
             var psObj = new GameObject("Debris");
@@ -190,7 +190,7 @@ namespace Tunnel
 
             _debrisPS = psObj.AddComponent<ParticleSystem>();
 
-            // 수동 Emit만 사용 (자동 방출 없음)
+            // ?�동 Emit�??�용 (?�동 방출 ?�음)
             var main = _debrisPS.main;
             main.startLifetime = 999f;
             main.startSpeed = 0f;
@@ -211,7 +211,7 @@ namespace Tunnel
             var shape = _debrisPS.shape;
             shape.enabled = false;
 
-            // Renderer: 공유 원형 텍스처 사용
+            // Renderer: 공유 ?�형 ?�스�??�용
             var renderer = psObj.GetComponent<ParticleSystemRenderer>();
             var circleMat = new Material(s_spriteShader);
             circleMat.mainTexture = s_circleTexture;
@@ -222,15 +222,15 @@ namespace Tunnel
             _debrisPS.Stop();
         }
 
-        /// <summary>터널 가장자리에 흙 덩어리 파티클을 흩뿌린다.</summary>
+        /// <summary>?�널 가?�자리에 ???�어�??�티?�을 ?�뿌린다.</summary>
         private void EmitDebris(Vector3 pos, Vector3 direction)
         {
             if (_debrisPS == null) return;
 
             Vector3 perpendicular = new Vector3(-direction.y, direction.x, 0f).normalized;
-            // 외곽선 반경: width * 0.6 (1.2f / 2)
-            // 파티클 생성 위치: 외곽선 경계에 걸치도록 함
-            // 0.55f ~ 0.65f (평균 0.6f) -> 파티클의 중심이 아웃라인 위에 옴
+            // ?�곽??반경: width * 0.6 (1.2f / 2)
+            // ?�티???�성 ?�치: ?�곽??경계??걸치?�록 ??
+            // 0.55f ~ 0.65f (?�균 0.6f) -> ?�티?�의 중심???�웃?�인 ?�에 ??
             float baseOffset = _tunnelWidth * 0.55f; 
 
             int count = Random.Range(2, 4);
@@ -239,16 +239,16 @@ namespace Tunnel
             for (int i = 0; i < count; i++)
             {
                 float side = (i % 2 == 0) ? 1f : -1f;
-                // 약간의 랜덤 (0.55 ~ 0.65)
+                // ?�간???�덤 (0.55 ~ 0.65)
                 float offset = baseOffset + _tunnelWidth * Random.Range(0.0f, 0.1f);
 
                 emitParams.position = pos + perpendicular * (side * offset);
                 emitParams.velocity = Vector3.zero;
-                // 크기: 0.2 ~ 0.4 (터널 벽과 자연스럽게 겹치게)
+                // ?�기: 0.2 ~ 0.4 (?�널 벽과 ?�연?�럽�?겹치�?
                 emitParams.startSize = _tunnelWidth * Random.Range(0.2f, 0.4f);
                 emitParams.startLifetime = 999f;
 
-                // 색상 미세 변동
+                // ?�상 미세 변??
                 Color c = _debrisColor;
                 float v = Random.Range(-0.08f, 0.08f);
                 c.r = Mathf.Clamp01(c.r + v);
@@ -260,7 +260,7 @@ namespace Tunnel
             }
         }
 
-        // ── LineRenderer 설정 ──
+        // ?�?� LineRenderer ?�정 ?�?�
         private void SetupLineRenderer(LineRenderer lr,
             Color color, float width, int sortingOrder, int corners, int caps, bool isShadow = false)
         {
@@ -269,7 +269,7 @@ namespace Tunnel
                 var instanceMat = new Material(s_spriteShader);
                 lr.material = instanceMat;
             }
-            // Shadow는 Initialize에서 별도 Material 할당됨
+            // Shadow??Initialize?�서 별도 Material ?�당??
 
             lr.startColor = color;
             lr.endColor = color;
@@ -281,11 +281,11 @@ namespace Tunnel
             lr.sortingOrder = sortingOrder;
             lr.positionCount = 0;
             
-            // 텍스처 모드: Stretch (그라데이션이 라인 전체 길이가 아니라 너비 방향으로 적용되게 하려면 Tile 모드 등을 고려해야 하지만,
-            // LineRenderer 기본 매핑은 U:길이, V:너비 이므로 Stretch가 적절함)
+            // ?�스�?모드: Stretch (그라?�이?�이 ?�인 ?�체 길이가 ?�니???�비 방향?�로 ?�용?�게 ?�려�?Tile 모드 ?�을 고려?�야 ?��?�?
+            // LineRenderer 기본 매핑?� U:길이, V:?�비 ?��?�?Stretch가 ?�절??
             lr.textureMode = LineTextureMode.Stretch; 
 
-            // 꼬리→머리 자연스러운 너비 변화
+            // 꼬리?�머�??�연?�러???�비 변??
             lr.widthCurve = new AnimationCurve(
                 new Keyframe(0.0f, 0.3f),
                 new Keyframe(0.1f, 0.8f),
@@ -295,7 +295,7 @@ namespace Tunnel
             );
         }
 
-        // ── 포인트 관리 ──
+        // ?�?� ?�인??관�??�?�
         public void AddPoint(Vector3 worldPos)
         {
             _points.Add(worldPos);
@@ -313,7 +313,7 @@ namespace Tunnel
             _shadowLr.SetPosition(count - 1, worldPos);
             _shadowLr.SetPosition(count, worldPos);
 
-            // 데브리 흩뿌리기 (방향이 있을 때만)
+            // ?�브�??�뿌리기 (방향???�을 ?�만)
             if (count >= 2)
             {
                 Vector3 dir = (_points[count - 1] - _points[count - 2]).normalized;
@@ -330,7 +330,7 @@ namespace Tunnel
             }
         }
 
-        /// <summary>매 프레임 호출. LineRenderer 맨 끝을 플레이어 위치에 고정.</summary>
+        /// <summary>�??�레???�출. LineRenderer �??�을 ?�레?�어 ?�치??고정.</summary>
         public void UpdateLiveHead(Vector3 playerPos)
         {
             if (_lr.positionCount > 0)
@@ -386,7 +386,7 @@ namespace Tunnel
                 SyncCollider();
         }
 
-        // ── Collider 동기화 (GC 감소: 배열 캐시) ──
+        // ?�?� Collider ?�기??(GC 감소: 배열 캐시) ?�?�
         private void SyncCollider()
         {
             int count = _colliderPoints.Count;
@@ -432,9 +432,9 @@ namespace Tunnel
                 _collider.edgeRadius = width * 0.5f;
         }
 
-        // ── 유틸리티 ──
+        // ?�?� ?�틸리티 ?�?�
 
-        /// <summary>런타임에 원형 텍스처를 생성한다 (static 캐시).</summary>
+        /// <summary>?��??�에 ?�형 ?�스처�? ?�성?�다 (static 캐시).</summary>
         private static Texture2D CreateCircleTexture(int size)
         {
             var tex = new Texture2D(size, size, TextureFormat.RGBA32, false);
@@ -459,9 +459,9 @@ namespace Tunnel
         }
 
         /// <summary>
-        /// 세로 그라데이션 텍스처 생성 (Top: Opaque, Center: Transparent, Bottom: Opaque)
-        /// V좌표가 너비 방향 (0~1). 1이 위쪽(Top Edge), 0이 아래쪽(Bottom Edge).
-        /// LineRenderer TextureMode.Stretch 기준.
+        /// ?�로 그라?�이???�스�??�성 (Top: Opaque, Center: Transparent, Bottom: Opaque)
+        /// V좌표가 ?�비 방향 (0~1). 1???�쪽(Top Edge), 0???�래�?Bottom Edge).
+        /// LineRenderer TextureMode.Stretch 기�?.
         /// </summary>
         private static Texture2D CreateShadowTexture(int width, int height)
         {
@@ -472,23 +472,23 @@ namespace Tunnel
                 // V: 0 (Below) -> 1 (Above)
                 float v = (float)y / (height - 1);
                 
-                // 그림자 로직: 양쪽 끝(0.0, 1.0)은 진하고, 중앙(0.5)은 투명
-                // Pipe 형태의 입체감 표현
+                // 그림??로직: ?�쪽 ??0.0, 1.0)?� 진하�? 중앙(0.5)?� ?�명
+                // Pipe ?�태???�체�??�현
                 
-                // 중심(0.5)에서 얼마나 떨어져 있는지 (0 ~ 0.5)
+                // 중심(0.5)?�서 ?�마???�어???�는지 (0 ~ 0.5)
                 float dist = Mathf.Abs(v - 0.5f);
                 
-                // 0.3 이상(가장자리 20%)부터 그림자 시작
+                // 0.3 ?�상(가?�자�?20%)부??그림???�작
                 // 0.3 -> 0.0, 0.5 -> 1.0
                 float alpha = 0f;
                 if (dist > 0.3f)
                 {
                     alpha = (dist - 0.3f) / 0.2f;
-                    // 부드러운 곡선 (Ease-In)
+                    // 부?�러??곡선 (Ease-In)
                     alpha = alpha * alpha; 
                 }
 
-                Color c = new Color(1f, 1f, 1f, alpha); // RGB는 흰색(Tint로 검정 만듦), A가 그림자 강도
+                Color c = new Color(1f, 1f, 1f, alpha); // RGB???�색(Tint�?검??만듦), A가 그림??강도
                 
                 for (int x = 0; x < width; x++)
                 {

@@ -18,7 +18,7 @@ namespace World
         [Tooltip("타일 회전 랜덤화")]
         [SerializeField] private bool _randomRotation = true;
         [Tooltip("맵 바깥쪽으로 타일을 얼마나 더 깔 것인가 (비율)")]
-        [SerializeField] private float _paddingRatio = 1.2f;
+        [SerializeField] private float _paddingRatio = 1.5f;
 
         [Header("경계선")]
         [SerializeField] private Color _boundaryColor = new Color(1f, 0.2f, 0.2f, 0.8f);
@@ -74,16 +74,22 @@ namespace World
             Random.State prevState = Random.state;
             Random.InitState(42);
 
-            // 그리드 순회, 확장된 범위까지 체크
+            // 쉐이더 준비 (GroundMasked)
+            Shader maskedShader = Shader.Find("DigWar/GroundMasked");
+            if (maskedShader == null)
+            {
+                Debug.LogError("[MapManager] 'DigWar/GroundMasked' 쉐이더를 찾을 수 없습니다.");
+                maskedShader = Shader.Find("Sprites/Default");
+            }
+
+            // O1 Fix: 공유 Material 1개만 생성 (수백 개 개별 생성 방지)
+            Material sharedGroundMat = new Material(maskedShader);
+
+            // 그리드 순회 — 사각 범위 전체를 채워 카메라 어디서든 빈틈 없음
             for (float x = -maxRadius; x <= maxRadius; x += _tileSize)
             {
                 for (float y = -maxRadius; y <= maxRadius; y += _tileSize)
                 {
-                    // 원형 경계 체크 (타일 중심 기준)
-                    // maxRadius 밖으로 나가는 것만 제외
-                    float distSqr = x * x + y * y;
-                    if (distSqr > (maxRadius + halfSize) * (maxRadius + halfSize))
-                        continue;
 
                     var tileObj = new GameObject("Tile");
                     tileObj.transform.SetParent(parent.transform, false);
@@ -101,6 +107,9 @@ namespace World
                     sr.sprite = _groundSprites[Random.Range(0, _groundSprites.Length)];
                     sr.sortingOrder = -10;
                     sr.drawMode = SpriteDrawMode.Simple;
+
+                    // 공유 Material 적용 (SRP Batcher 배칭 가능)
+                    sr.sharedMaterial = sharedGroundMat;
 
                     // 타일 크기 맞추기
                     float spriteWorldSize = sr.sprite.rect.width / sr.sprite.pixelsPerUnit;

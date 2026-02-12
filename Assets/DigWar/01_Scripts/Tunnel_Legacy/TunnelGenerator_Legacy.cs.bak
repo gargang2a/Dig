@@ -1,0 +1,288 @@
+using System.Collections.Generic;
+using UnityEngine;
+using Core;
+using Core.Data;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
+namespace Tunnel
+{
+    /// <summary>
+    /// ?Œë ˆ?´ì–´ ?´ë™ ê²½ë¡œë¥??°ë¼ ?°ë„???ì„±?œë‹¤.
+    /// ?ìˆ˜??ë¹„ë??˜ì—¬ ìµœë? ê¸¸ì´ê°€ ?˜ì–´?˜ë©°,
+    /// ì´ˆê³¼ ??ê¼¬ë¦¬ê°€ ë¶€?œëŸ½ê²??˜ì¶•?œë‹¤.
+    /// </summary>
+    public class TunnelGenerator_Legacy : MonoBehaviour
+    {
+        [Header("Visuals")]
+        [SerializeField] private Material _tunnelMaterial;
+        [SerializeField] private Color _tunnelColor = new Color(0.77f, 0.64f, 0.40f, 1f);  // ë°ì? ëª¨ë˜
+        [SerializeField] private Color _outlineColor = new Color(0.24f, 0.17f, 0.10f, 1f);  // ?´ë‘???Œë‘ë¦?
+
+
+        private GameSettings _settings;
+        private readonly List<TunnelSegment> _segments = new List<TunnelSegment>();
+        private TunnelSegment _currentSegment;
+        private int _pointsInCurrentSegment;
+
+        private Vector3 _lastPosition;
+        private bool _hasFirstPoint;
+        private int _totalPointCount;
+
+        // Object Pooling
+        private readonly Queue<TunnelSegment> _segmentPool = new Queue<TunnelSegment>();
+
+        public int TotalPointCount => _totalPointCount;
+        public int SegmentCount => _segments.Count;
+
+        // ê¼¬ë¦¬ ?¬ë¼?´ë”©
+        private float _tailLerp;
+        private int _boostDropCounter; // ë¶€?¤íŠ¸ ???œë¡­ ê°„ê²© ì¹´ìš´??
+        private Player.IDigger _digger;
+        private World.GemSpawner _gemSpawner;
+
+        private const int SAFE_SEGMENT_COUNT = 2;
+        private const int MAX_POINTS_PER_SEGMENT = 200;
+        private const int SAFE_HEAD_POINTS = 5;
+
+        private void Start()
+        {
+            if (GameManager.Instance == null || GameManager.Instance.Settings == null)
+            {
+                Debug.LogError("[TunnelGenerator] GameManager ?ëŠ” Settings ?„ë½");
+                enabled = false;
+                return;
+            }
+
+            _settings = GameManager.Instance.Settings;
+            _digger = GetComponent<Player.IDigger>();
+            _gemSpawner = FindObjectOfType<World.GemSpawner>();
+            _lastPosition = transform.position;
+            CreateNewSegment();
+        }
+
+        private void Update()
+        {
+            float sqrDist = (transform.position - _lastPosition).sqrMagnitude;
+            float threshold = _settings.SegmentDistance;
+
+            if (sqrDist >= threshold * threshold)
+                AddPoint();
+
+            // ?°ë„ ë¨¸ë¦¬ë¥???ƒ ?Œë ˆ?´ì–´???°ê²° (?¬ì¸??ì¶”ê? ?¬ì´ ê°??œê±°)
+            if (_currentSegment != null)
+                _currentSegment.UpdateLiveHead(transform.position);
+
+            UpdateTailSlide();
+        }
+
+        private void AddPoint()
+        {
+            Vector3 pos = transform.position;
+
+            if (!_hasFirstPoint)
+            {
+                _hasFirstPoint = true;
+                _lastPosition = pos;
+                return;
+            }
+
+            _currentSegment.AddPoint(pos);
+            _pointsInCurrentSegment++;
+            _totalPointCount++;
+
+            if (_pointsInCurrentSegment >= MAX_POINTS_PER_SEGMENT)
+            {
+                CreateNewSegment();
+                _currentSegment.AddPoint(pos);
+            }
+
+            _lastPosition = pos;
+        }
+
+        /// <summary>
+        /// ê¼¬ë¦¬ë¥?ë¶€?œëŸ½ê²??¬ë¼?´ë”©?œë‹¤.
+        /// >= maxPoints?´ë©´ ??ƒ ?¬ë¼?´ë”© ? ì?. ?¤ì œ ?œê±°??> maxPoints???Œë§Œ.
+        /// ??ë¶„ë¦¬ë¡?"?°ë¼?¤ë‹¤-ë©ˆì¶”?? ?¨í„´??ë°©ì??œë‹¤.
+        /// </summary>
+        private void UpdateTailSlide()
+        {
+            float score = GameManager.Instance.CurrentScore;
+            float maxDistance = _settings.BaseTunnelLength
+                + score * _settings.TunnelLengthPerScore;
+            int maxPoints = Mathf.Max(2, Mathf.FloorToInt(maxDistance / _settings.SegmentDistance));
+
+            // ?„ì§ ?œê³„ê¹Œì? ??ì°¼ìœ¼ë©??¬ë¼?´ë”© ë¶ˆí•„??
+            if (_totalPointCount < maxPoints || _segments.Count == 0)
+            {
+                _tailLerp = 0f;
+                return;
+            }
+
+            var oldest = _segments[0];
+            if (oldest.PointCount < 2) return;
+            if (oldest == _currentSegment && oldest.PointCount <= SAFE_HEAD_POINTS) return;
+
+            // ?¤ì œ ?Œë ˆ?´ì–´ ?ë„(ë¶€?¤íŠ¸ ?¬í•¨)ë¡??™ê¸°??
+            float actualSpeed = _digger != null
+                ? _digger.CurrentSpeed
+                : _settings.BaseSpeed * transform.localScale.x;
+            float slideSpeed = actualSpeed / Mathf.Max(_settings.SegmentDistance, 0.01f);
+            _tailLerp += slideSpeed * Time.deltaTime;
+
+            bool isBoosting = _digger != null && _digger.IsBoosting;
+
+            // ?¤ì œ ?¬ì¸???œê±°
+            while (_tailLerp >= 1f)
+            {
+                if (_totalPointCount <= maxPoints)
+                {
+                    _tailLerp = 1f;
+                    break;
+                }
+
+                oldest = _segments[0];
+                if (oldest == _currentSegment && oldest.PointCount <= SAFE_HEAD_POINTS) break;
+                if (oldest.PointCount < 2) break;
+
+                // ë¶€?¤íŠ¸ ì¤?ê¼¬ë¦¬?ì„œ ???œë¡­ (10?¬ì¸?¸ë‹¹ 1ê°? ?ìˆ˜ ?¬ìœ ?œì—ë§?
+                if (isBoosting && _gemSpawner != null)
+                {
+                    _boostDropCounter++;
+                    if (_boostDropCounter >= 10
+                        && GameManager.Instance.CurrentScore >= _settings.GemScore)
+                    {
+                        _gemSpawner.DropGemAt(oldest.GetFirstPointPosition());
+                        _boostDropCounter = 0;
+                    }
+                }
+
+                oldest.RemoveFirstPoint();
+                _totalPointCount--;
+                _tailLerp = 0f;
+
+                if (oldest != _currentSegment && oldest.PointCount < 2)
+                {
+                    _segments.RemoveAt(0);
+                    // Destroy ?€???€ë§?ë°˜í™˜
+                    oldest.gameObject.SetActive(false);
+                    _segmentPool.Enqueue(oldest);
+                }
+            }
+
+            // ?œê°???¬ë¼?´ë”©
+            if (_segments.Count > 0)
+            {
+                oldest = _segments[0];
+                if (oldest.PointCount >= 2 && _tailLerp > 0f)
+                {
+                    oldest.SlideTailPoint(Mathf.Min(_tailLerp, 1f));
+                }
+            }
+        }
+
+        private void CreateNewSegment()
+        {
+            float width = transform.localScale.x * _settings.TunnelWidthMultiplier;
+            TunnelSegment segment = null;
+
+            // ?€?ì„œ ê°€?¸ì˜¤ê¸?
+            if (_segmentPool.Count > 0)
+            {
+                segment = _segmentPool.Dequeue();
+                segment.gameObject.SetActive(true);
+            }
+            else
+            {
+                var obj = new GameObject($"TunnelSegment_{Random.Range(0, 10000)}"); // ?´ë¦„ ?œë¤?”ëŠ” ?”ë²„ê·¸ìš©
+                segment = obj.AddComponent<TunnelSegment>();
+            }
+
+            // ?„ì¹˜ ì´ˆê¸°?”ëŠ” Transformë§?
+            segment.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            
+            // Initialize ?´ë??ì„œ ?¬ì‚¬??UpdateVisuals + Reset) ì²˜ë¦¬
+            segment.Initialize(_tunnelMaterial, _tunnelColor, _outlineColor, width);
+
+            _segments.Add(segment);
+            _currentSegment = segment;
+            _pointsInCurrentSegment = 0;
+
+            ActivateOldColliders();
+        }
+
+        private void ActivateOldColliders()
+        {
+            int idx = _segments.Count - 1 - SAFE_SEGMENT_COUNT;
+            if (idx >= 0 && _segments[idx] != null)
+                _segments[idx].EnableCollider();
+        }
+
+        public void UpdateWidth(float newScale)
+        {
+            if (_settings == null)
+            {
+                if (GameManager.Instance != null)
+                    _settings = GameManager.Instance.Settings;
+                
+                if (_settings == null) return;
+            }
+
+            float width = newScale * _settings.TunnelWidthMultiplier;
+            for (int i = 0; i < _segments.Count; i++)
+            {
+                if (_segments[i] != null)
+                    _segments[i].SetWidth(width);
+            }
+        }
+
+        public void DestroyAllSegments()
+        {
+            for (int i = 0; i < _segments.Count; i++)
+            {
+                if (_segments[i] != null)
+                {
+                    _segments[i].gameObject.SetActive(false);
+                    _segmentPool.Enqueue(_segments[i]);
+                }
+            }
+            _segments.Clear();
+            _totalPointCount = 0;
+            _tailLerp = 0f;
+        }
+
+        /// <summary>
+        /// ?°ë„ ë¹„ì£¼?¼ì„ ?¸ë??ì„œ ?¤ì •?œë‹¤ (ë´??¤í¬????.
+        /// Start() ?„ì— ?¸ì¶œ?´ì•¼ ì²??¸ê·¸ë¨¼íŠ¸ë¶€???ìš©?œë‹¤.
+        /// </summary>
+        public void SetTunnelVisuals(Material material, Color fillColor, Color outlineColor)
+        {
+            _tunnelMaterial = material;
+            _tunnelColor = fillColor;
+            _outlineColor = outlineColor;
+        }
+
+        // ?˜ìœ„?¸í™˜
+        public void SetTunnelVisuals(Material material, Color color)
+        {
+            Color outline = color * 0.5f;
+            outline.a = 1f;
+            SetTunnelVisuals(material, color, outline);
+        }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            if (_tunnelMaterial != null) return;
+
+            string[] guids = AssetDatabase.FindAssets("Tunnel t:Material");
+            if (guids.Length > 0)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                _tunnelMaterial = AssetDatabase.LoadAssetAtPath<Material>(path);
+            }
+        }
+#endif
+    }
+}

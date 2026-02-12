@@ -47,7 +47,9 @@ namespace Player
                 var main = _ps.main;
                 main.startSize = new ParticleSystem.MinMaxCurve(0.05f * scale, 0.15f * scale);
                 main.startSpeed = new ParticleSystem.MinMaxCurve(1f * scale, 3f * scale);
-                _ps.transform.localPosition = new Vector3(0f, 0.5f * scale, 0f);
+                // localPosition은 부모 스케일에 의해 자동으로 곱해지므로,
+                // 고정 오프셋만 설정 (이중 스케일링 방지)
+                _ps.transform.localPosition = new Vector3(0f, 0.5f, 0f);
 
                 // Shape radius도 스케일에 비례
                 var shape = _ps.shape;

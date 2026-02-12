@@ -169,9 +169,8 @@ namespace Player
         {
             if (_isDead) return;
 
-            // 터널 충돌 → 사망
-            if (other.GetComponent<Tunnel.TunnelSegment>() != null)
-                Die();
+            // [TODO] 마스크 기반 충돌 처리 필요 (TunnelSegment 삭제됨)
+            // 현재 마스크 방식에서는 Collider 기반 충돌이 발생하지 않음.
         }
 
         private void Die()
@@ -179,10 +178,10 @@ namespace Player
             _isDead = true;
             CurrentSpeed = 0f;
 
-            // 터널 파괴
+            // 터널 파기 중단
             var tunnel = GetComponent<Tunnel.TunnelGenerator>();
             if (tunnel != null)
-                tunnel.DestroyAllSegments();
+                tunnel.SetDigging(false);
 
             // 시각적 피드백
             var sr = GetComponentInChildren<SpriteRenderer>();

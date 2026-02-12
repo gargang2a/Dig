@@ -101,10 +101,14 @@ namespace Player
             var tunnel = botObj.AddComponent<Tunnel.TunnelGenerator>();
 
             // 봇별 터널 색상: 채도를 낮춰 흙 느낌으로
+            // 봇별 터널 색상: Mask System v1에서는 단일 텍스처(R8)만 사용하므로 색상 구분 미지원.
+            // 추후 RGBA 마스크 등으로 확장 시 재구현 필요.
+            /*
             Color tunnelColor = botColor * 0.6f;
             tunnelColor = Color.Lerp(tunnelColor, new Color(0.45f, 0.3f, 0.18f), 0.5f); // 흙색 혼합
             tunnelColor.a = 1f;
             tunnel.SetTunnelVisuals(_tunnelMaterial, tunnelColor);
+            */
         }
     }
 }

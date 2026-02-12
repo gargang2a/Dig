@@ -151,9 +151,10 @@ namespace Player
         {
             if (_isDead) return;
 
-            // TunnelSegment 충돌 → 사망
-            if (other.GetComponent<Tunnel.TunnelSegment>() != null)
-                Die();
+            // [TODO] 마스크 기반 충돌 처리 필요 (TunnelSegment 삭제됨)
+            // 현재는 텍스처 마스크 방식이므로 Collider 충돌이 발생하지 않음.
+            // 추후 TunnelMaskManager에서 현재 위치의 색상을 읽어(ReadPixel) 충돌 판정하거나,
+            // 별도의 충돌체 관리 시스템 도입 필요.
         }
 
         /// <summary>
@@ -186,10 +187,10 @@ namespace Player
                 Systems.SoundManager.Instance.StopEngineSound();
             }
 
-            // 터널 파괴
+            // 터널 파괴 (더 이상 파지 않음)
             var tunnel = GetComponent<Tunnel.TunnelGenerator>();
             if (tunnel != null)
-                tunnel.DestroyAllSegments();
+                tunnel.SetDigging(false);
 
             // 시각적 피드백: 빨갛게 변하고 작아짐
             var sr = _visualRoot != null

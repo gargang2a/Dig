@@ -123,40 +123,9 @@ namespace Systems
         // ===== 터널 페인팅 =====
         private void PaintAllTunnels()
         {
-            // TunnelSegment를 전부 찾아 LineRenderer 점을 읽어 페인팅
-            var segments = FindObjectsOfType<TunnelSegment>();
-
-            foreach (var seg in segments)
-            {
-                var lrs = seg.GetComponentsInChildren<LineRenderer>();
-                if (lrs == null || lrs.Length == 0) continue;
-
-                // Fill LineRenderer (마지막 자식)의 색상과 위치 사용
-                var lr = lrs[lrs.Length - 1];
-                int count = lr.positionCount;
-                if (count < 2) continue;
-
-                // 캐시 배열 확장 (GC는 배열 부족 시에만 발생)
-                if (_posCache.Length < count)
-                    _posCache = new Vector3[count * 2];
-                lr.GetPositions(_posCache);
-
-                // 터널 색상: Fill LR의 startColor를 2배 밝게 (미니맵 시인성)
-                Color c = lr.startColor;
-                Color32 col = new Color32(
-                    (byte)Mathf.Min(255, c.r * 510f),
-                    (byte)Mathf.Min(255, c.g * 510f),
-                    (byte)Mathf.Min(255, c.b * 510f),
-                    255
-                );
-
-                // 터널 너비 → 픽셀 반경 (굵게)
-                float w = lr.startWidth;
-                int pr = Mathf.Max(2, Mathf.RoundToInt(w / _mapRadius * HALF));
-
-                for (int i = 0; i < count; i++)
-                    PaintDot(_posCache[i], pr, col);
-            }
+            // [TODO] Render Texture Masking 시스템 전환으로 인해 비활성화.
+            // TunnelMaskManager에서 CPU 읽기 가능한 Texture2D 캐시를
+            // 주기적으로 제공하는 방식으로 재구현 예정.
         }
 
         // ===== 그리기 헬퍼 =====

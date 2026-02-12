@@ -59,9 +59,8 @@ namespace Core
             // 변환 적용
             transform.localScale = Vector3.one * _currentScale;
 
-            // 터널 너비 동기화
-            if (_tunnelGenerator != null)
-                _tunnelGenerator.UpdateWidth(_currentScale);
+            // 터널 너비 동기화: A1 Fix에 의해 TunnelGenerator 내부에서 자동 처리됨
+            // if (_tunnelGenerator != null) _tunnelGenerator.UpdateWidth(_currentScale);
         }
 
         /// <summary>
