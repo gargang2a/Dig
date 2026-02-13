@@ -3,101 +3,137 @@ using UnityEngine;
 namespace Player
 {
     /// <summary>
-    /// 두더지가 이동 중일 때 머리 앞쪽에 흙 파편 파티클을 방출한다.
-    /// PlayerController/AIController와 같은 오브젝트에 추가한다.
+    /// 두더지가 이동 중일 때 파티클을 방출한다.
+    /// 1. Head: 흙 파편 (Original Setting 복구)
+    /// 2. Tail: 엉덩이 뒤 연기 (New)
     /// </summary>
     public class DiggingParticle : MonoBehaviour
     {
-        [Header("파티클 설정")]
+        [Header("Head Particle (Dirt)")]
         [SerializeField] private Color _dirtColor = new Color(0.55f, 0.35f, 0.17f, 1f);
         [SerializeField] private Color _dirtColorAlt = new Color(0.70f, 0.50f, 0.25f, 1f);
         [SerializeField] private float _emissionRate = 30f;
         [SerializeField] private float _boostEmissionMultiplier = 3f;
 
-        private ParticleSystem _ps;
-        private ParticleSystem.EmissionModule _emission;
+        [Header("Tail Particle (Dust Trail)")]
+        [SerializeField] private Color _tailColor = new Color(0.6f, 0.45f, 0.3f, 0.3f); // 갈색 계열 반투명
+        [SerializeField] private float _tailEmissionRate = 20f;
+
+        private ParticleSystem _headPS;
+        private ParticleSystem _tailPS;
+        private ParticleSystem.EmissionModule _headEmission;
+        private ParticleSystem.EmissionModule _tailEmission;
+        
         private IDigger _digger;
-        private float _lastScale = -1f; // scale 변경 감지용
+        private float _lastScale = -1f;
 
         private void Start()
         {
             _digger = GetComponent<IDigger>();
-            CreateParticleSystem();
+            
+            // 클린업: 기존 파티클 오브젝트들이 있다면 제거
+            foreach (Transform child in transform)
+            {
+                if (child.name.Contains("Digging")) Destroy(child.gameObject);
+            }
+
+            CreateSystems();
         }
 
         private void Update()
         {
-            if (_digger == null || _ps == null) return;
+            if (_digger == null || _headPS == null || _tailPS == null) return;
 
             float scale = transform.localScale.x;
             float speed = _digger.CurrentSpeed;
             bool moving = speed > 0.1f;
 
-            // 이동 중일 때만 파티클 방출
-            float rate = moving ? _emissionRate * scale : 0f;
-            if (_digger.IsBoosting)
-                rate *= _boostEmissionMultiplier;
-            _emission.rateOverTime = rate;
+            // 1. Head Particle Control (Original Logic)
+            float headRate = moving ? _emissionRate * scale : 0f;
+            if (_digger.IsBoosting) headRate *= _boostEmissionMultiplier;
+            _headEmission.rateOverTime = headRate;
 
-            // scale이 변경되었을 때만 파티클 속성 업데이트 (GC 감소)
+            // 2. Tail Particle Control
+            float tailRate = moving ? _tailEmissionRate * scale : 0f;
+            if (_digger.IsBoosting) tailRate *= 1.5f; // 부스트 시 약간 증가
+            _tailEmission.rateOverTime = tailRate;
+
+            // Scale Sync
             if (!Mathf.Approximately(scale, _lastScale))
             {
                 _lastScale = scale;
-
-                var main = _ps.main;
-                main.startSize = new ParticleSystem.MinMaxCurve(0.05f * scale, 0.15f * scale);
-                main.startSpeed = new ParticleSystem.MinMaxCurve(1f * scale, 3f * scale);
-                // localPosition은 부모 스케일에 의해 자동으로 곱해지므로,
-                // 고정 오프셋만 설정 (이중 스케일링 방지)
-                _ps.transform.localPosition = new Vector3(0f, 0.5f, 0f);
-
-                // Shape radius도 스케일에 비례
-                var shape = _ps.shape;
-                shape.radius = 0.15f * scale;
+                UpdateScale(scale);
             }
         }
 
-        private void CreateParticleSystem()
+        private void UpdateScale(float scale)
         {
-            var psObj = new GameObject("DiggingDust");
-            psObj.transform.SetParent(transform, false);
-            psObj.transform.localPosition = new Vector3(0f, 0.5f, 0f);
+            // Head Scale (Original)
+            var headMain = _headPS.main;
+            headMain.startSize = new ParticleSystem.MinMaxCurve(0.05f * scale, 0.15f * scale);
+            headMain.startSpeed = new ParticleSystem.MinMaxCurve(1f * scale, 3f * scale);
+            var headShape = _headPS.shape;
+            headShape.radius = 0.15f * scale;
+            _headPS.transform.localPosition = new Vector3(0f, 0.4f, 0f); // 머리 쪽
 
-            _ps = psObj.AddComponent<ParticleSystem>();
+            // Tail Scale (New)
+            var tailMain = _tailPS.main;
+            tailMain.startSize = new ParticleSystem.MinMaxCurve(0.2f * scale, 0.4f * scale); // 큼직하게
+            tailMain.startSpeed = new ParticleSystem.MinMaxCurve(0.2f * scale, 0.8f * scale); // 느리게
+            var tailShape = _tailPS.shape;
+            tailShape.radius = 0.1f * scale;
+            _tailPS.transform.localPosition = new Vector3(0f, -0.4f, 0f); // 엉덩이 쪽
+        }
 
-            // Main
-            var main = _ps.main;
+        private void CreateSystems()
+        {
+            var root = new GameObject("DiggingEffects");
+            root.transform.SetParent(transform, false);
+            root.transform.localPosition = Vector3.zero;
+
+            _headPS = CreateHeadParticle(root.transform);
+            _tailPS = CreateTailParticle(root.transform);
+
+            _headEmission = _headPS.emission;
+            _tailEmission = _tailPS.emission;
+        }
+
+        private ParticleSystem CreateHeadParticle(Transform parent)
+        {
+            var go = new GameObject("HeadDust");
+            go.transform.SetParent(parent, false);
+            var ps = go.AddComponent<ParticleSystem>();
+
+            // Main (Original Settings)
+            var main = ps.main;
             main.startLifetime = 0.6f;
             main.startSpeed = new ParticleSystem.MinMaxCurve(1f, 3f);
             main.startSize = new ParticleSystem.MinMaxCurve(0.05f, 0.15f);
             main.startColor = new ParticleSystem.MinMaxGradient(_dirtColor, _dirtColorAlt);
-            main.gravityModifier = 0.5f;
+            main.gravityModifier = 0.5f; // 중력 있음
             main.simulationSpace = ParticleSystemSimulationSpace.World;
             main.maxParticles = 200;
             main.startRotation = new ParticleSystem.MinMaxCurve(0f, 360f * Mathf.Deg2Rad);
 
             // Emission
-            _emission = _ps.emission;
-            _emission.rateOverTime = 0f;
+            var em = ps.emission;
+            em.rateOverTime = 0f;
 
-            // Shape: 콘 형태로 전방 확산
-            var shape = _ps.shape;
+            // Shape
+            var shape = ps.shape;
             shape.shapeType = ParticleSystemShapeType.Cone;
             shape.angle = 35f;
             shape.radius = 0.15f;
             shape.rotation = new Vector3(-90f, 0f, 0f);
 
-            // Size over Lifetime: 점점 작아짐
-            var sol = _ps.sizeOverLifetime;
+            // Size Over Lifetime
+            var sol = ps.sizeOverLifetime;
             sol.enabled = true;
-            sol.size = new ParticleSystem.MinMaxCurve(1f,
-                new AnimationCurve(
-                    new Keyframe(0f, 1f),
-                    new Keyframe(1f, 0f)
-                ));
+            sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
+                new Keyframe(0f, 1f), new Keyframe(1f, 0f)));
 
-            // Color over Lifetime: 페이드 아웃
-            var col = _ps.colorOverLifetime;
+            // Color Over Lifetime
+            var col = ps.colorOverLifetime;
             col.enabled = true;
             var grad = new Gradient();
             grad.SetKeys(
@@ -106,12 +142,65 @@ namespace Player
             );
             col.color = grad;
 
-            // Renderer: Shader를 TunnelSegment의 static 캐시와 동일하게 사용
+            SetupRenderer(go, 15); // Body(10)보다 위
+            return ps;
+        }
+
+        private ParticleSystem CreateTailParticle(Transform parent)
+        {
+            var go = new GameObject("TailDust");
+            go.transform.SetParent(parent, false);
+            var ps = go.AddComponent<ParticleSystem>();
+
+            // Main (Dust Trail Settings)
+            var main = ps.main;
+            main.startLifetime = 1.5f; // 길게 남음
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0.0f, 0.1f); // 거의 정지 상태 (제자리에 남음)
+            main.startSize = new ParticleSystem.MinMaxCurve(0.3f, 0.5f); // 큼직하게
+            main.startColor = _tailColor; // 갈색
+            main.gravityModifier = 0.0f; // 중력 영향 없음 (공중에 뜸)
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.maxParticles = 100;
+            main.startRotation = new ParticleSystem.MinMaxCurve(0f, 360f * Mathf.Deg2Rad);
+
+            // Emission
+            var em = ps.emission;
+            em.rateOverTime = 0f;
+
+            // Shape (Line 형태나 넓은 Cone)
+            var shape = ps.shape;
+            shape.shapeType = ParticleSystemShapeType.Sphere; // 둥글게 퍼짐
+            shape.radius = 0.2f;
+            
+            // Size Over Lifetime (커지면서 사라짐)
+            var sol = ps.sizeOverLifetime;
+            sol.enabled = true;
+            sol.size = new ParticleSystem.MinMaxCurve(1f, new AnimationCurve(
+                new Keyframe(0f, 0.5f), new Keyframe(1f, 1.2f)));
+
+            // Color Over Lifetime (Fade Out)
+            var col = ps.colorOverLifetime;
+            col.enabled = true;
+            var grad = new Gradient();
+            grad.SetKeys(
+                new[] { new GradientColorKey(_tailColor, 0f), new GradientColorKey(_tailColor, 1f) },
+                new[] { new GradientAlphaKey(_tailColor.a, 0f), new GradientAlphaKey(0f, 1f) }
+            );
+            col.color = grad;
+
+            SetupRenderer(go, 9); // Body(10)보다 뒤
+            return ps;
+        }
+
+        private void SetupRenderer(GameObject go, int sortingOrder)
+        {
             var shader = Shader.Find("Sprites/Default")
                 ?? Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
-            var renderer = psObj.GetComponent<ParticleSystemRenderer>();
+            var renderer = go.GetComponent<ParticleSystemRenderer>();
+            if (renderer == null) renderer = go.AddComponent<ParticleSystemRenderer>();
+            
             renderer.material = new Material(shader);
-            renderer.sortingOrder = 15;
+            renderer.sortingOrder = sortingOrder;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
         }
     }

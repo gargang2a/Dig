@@ -13,7 +13,17 @@ namespace Systems
         [Tooltip("0이면 즉시, 높을수록 부드럽게 추적")]
         [SerializeField, Range(0f, 0.5f)] private float _smoothTime = 0.05f;
 
+        public static CameraFollow Instance { get; private set; }
+
         private Vector3 _velocity;
+        private float _shakeTimer;
+        private float _shakeAmount;
+
+        private void Awake()
+        {
+            if (Instance == null) Instance = this;
+            else Destroy(gameObject);
+        }
 
         private void LateUpdate()
         {
@@ -22,6 +32,7 @@ namespace Systems
             Vector3 dest = _target.position;
             dest.z = transform.position.z;
 
+            // 1. Smooth Damp Movement
             if (_smoothTime <= 0.001f)
             {
                 transform.position = dest;

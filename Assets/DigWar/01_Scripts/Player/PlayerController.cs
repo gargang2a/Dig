@@ -6,8 +6,7 @@ namespace Player
 {
     /// <summary>
     /// 플레이어의 입력, 이동, 회전, 충돌 처리.
-    /// Transform 기반 이동이므로 모든 로직이 Update에서 실행되며
-    /// 카메라 추적과의 프레임 불일치가 발생하지 않는다.
+    /// [Stealth & Ambush] 평상시 터널 없이 이동, LMB 홀드 시 공격 모드(터널+부스트+처치).
     /// </summary>
     [RequireComponent(typeof(Rigidbody2D))]
     [RequireComponent(typeof(Core.MoleGrowth))]
@@ -17,11 +16,12 @@ namespace Player
         [SerializeField] private Transform _visualRoot;
 
         private Core.MoleGrowth _growth;
+        private Tunnel.TunnelGenerator _tunnelGen;
 
         private Camera _mainCamera;
         private GameSettings _settings;
         private Rigidbody2D _rb;
-        private bool _isBoosting;
+        private bool _isAttacking;   // LMB 홀드 = 공격 모드
         private bool _isDead;
 
         private void Awake()
@@ -30,6 +30,7 @@ namespace Player
             _rb.bodyType = RigidbodyType2D.Kinematic;
             _growth = GetComponent<Core.MoleGrowth>();
             if (_growth == null) _growth = gameObject.AddComponent<Core.MoleGrowth>();
+            _tunnelGen = GetComponent<Tunnel.TunnelGenerator>();
         }
 
         private void Start()
@@ -57,11 +58,8 @@ namespace Player
             // 사운드 업데이트
             if (Systems.SoundManager.Instance != null)
             {
-                // 실제 이동 중인지 확인 (속도 > 0)
                 bool isMoving = CurrentSpeed > 0.1f;
-                // 부스트는 입력(_isBoosting)과 점수(CurrentSpeed가 부스트 속도인지 확인하면 좋지만, 간단히 Score 체크)
-                // Move()에서 계산된 상태를 가져오는게 좋지만, 여기서는 로직 중복을 최소화하여 재계산
-                bool canBoost = _isBoosting && GameManager.Instance.CurrentScore > 0f;
+                bool canBoost = _isAttacking && GameManager.Instance.CurrentScore > 0f;
                 Systems.SoundManager.Instance.UpdateEngineSound(isMoving, canBoost);
             }
         }
@@ -80,7 +78,6 @@ namespace Player
 
         /// <summary>
         /// GameManager에서 전파된 사망 이벤트 핸들러.
-        /// (MapBoundary 등 외부 요인으로 사망했을 때 처리를 위함)
         /// </summary>
         private void OnGlobalDeath()
         {
@@ -89,23 +86,27 @@ namespace Player
 
         private void HandleInput()
         {
-            _isBoosting = Input.GetMouseButton(0);
+            bool wasAttacking = _isAttacking;
+            _isAttacking = Input.GetMouseButton(0);
+
+            // [Stealth & Ambush] 상태 전환 시에만 터널 토글 (매 프레임 호출 방지)
+            if (_tunnelGen != null && wasAttacking != _isAttacking)
+                _tunnelGen.SetDigging(_isAttacking);
         }
 
         /// <summary>
-        /// Y+ 방향(스프라이트 머리)으로 전진한다.
-        /// 부스트 중에는 점수를 소모하여 가속한다.
+        /// Y+ 방향으로 전진. 공격 모드 시 부스트.
         /// </summary>
         private void Move()
         {
             float speed = _settings.BaseSpeed * transform.localScale.x;
-            bool canBoost = _isBoosting && GameManager.Instance.CurrentScore > 0f;
+            bool canBoost = _isAttacking && GameManager.Instance.CurrentScore > 0f;
 
             if (canBoost)
             {
                 speed *= _settings.BoostMultiplier;
                 float cost = _settings.BoostScoreCostPerSecond * Time.deltaTime;
-                
+
                 // 전역 점수(UI)와 성장 점수(크기) 모두 차감
                 GameManager.Instance.AddScore(-cost);
                 if (_growth != null) _growth.AddScore(-cost);
@@ -118,13 +119,14 @@ namespace Player
         /// <summary>현재 프레임의 실제 이동 속도. 부스트 포함.</summary>
         public float CurrentSpeed { get; private set; }
 
-        /// <summary>현재 부스트 중인지 여부.</summary>
-        public bool IsBoosting => _isBoosting;
+        /// <summary>현재 부스트 중인지 여부. 공격 모드와 동일.</summary>
+        public bool IsBoosting => _isAttacking;
+
+        /// <summary>공격 모드(Assault) 여부.</summary>
+        public bool IsAttacking => _isAttacking;
 
         /// <summary>
-        /// 마우스 방향으로 회전한다.
-        /// Atan2가 X+축 기준이므로 Y+가 전방인 스프라이트에 맞춰 -90도 보정.
-        /// 크기가 커질수록 회전이 느려져 대형 플레이어의 관성을 표현한다.
+        /// 마우스 방향으로 회전.
         /// </summary>
         private void Rotate()
         {
@@ -147,19 +149,28 @@ namespace Player
             );
         }
 
+        /// <summary>
+        /// [Stealth & Ambush] 충돌 처리.
+        /// 공격 모드일 때 적과 충돌하면 적을 처치한다.
+        /// </summary>
         private void OnTriggerEnter2D(Collider2D other)
         {
             if (_isDead) return;
 
-            // [TODO] 마스크 기반 충돌 처리 필요 (TunnelSegment 삭제됨)
-            // 현재는 텍스처 마스크 방식이므로 Collider 충돌이 발생하지 않음.
-            // 추후 TunnelMaskManager에서 현재 위치의 색상을 읽어(ReadPixel) 충돌 판정하거나,
-            // 별도의 충돌체 관리 시스템 도입 필요.
+            // 공격 모드가 아니면 충돌 무시
+            if (!_isAttacking) return;
+
+            // AI 봇과의 충돌 처리
+            var enemy = other.GetComponent<IDigger>();
+            if (enemy != null && enemy != (IDigger)this)
+            {
+                Debug.Log($"💀 [Assault Kill] 공격 모드로 적 처치!");
+                enemy.Die();
+            }
         }
 
         /// <summary>
         /// 젬 획득 시 호출 (IDigger 구현).
-        /// 전역 점수와 성장 점수를 모두 증가시킨다.
         /// </summary>
         public void AddScore(float amount)
         {
@@ -170,7 +181,10 @@ namespace Player
                 _growth.AddScore(amount);
         }
 
-        private void Die()
+        /// <summary>
+        /// 사망 처리 (IDigger 구현).
+        /// </summary>
+        public void Die()
         {
             _isDead = true;
             CurrentSpeed = 0f;
@@ -179,7 +193,6 @@ namespace Player
             if (GameManager.Instance != null)
                 GameManager.Instance.KillPlayer();
 
-            // 사망 사운드 재생
             // 사망 사운드 재생 및 엔진 정지
             if (Systems.SoundManager.Instance != null)
             {
@@ -188,9 +201,8 @@ namespace Player
             }
 
             // 터널 파괴 (더 이상 파지 않음)
-            var tunnel = GetComponent<Tunnel.TunnelGenerator>();
-            if (tunnel != null)
-                tunnel.SetDigging(false);
+            if (_tunnelGen != null)
+                _tunnelGen.SetDigging(false);
 
             // 시각적 피드백: 빨갛게 변하고 작아짐
             var sr = _visualRoot != null

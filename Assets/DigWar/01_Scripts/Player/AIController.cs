@@ -26,6 +26,9 @@ namespace Player
         // 속도 프로퍼티 (TunnelGenerator 호환)
         public float CurrentSpeed { get; private set; }
         public bool IsBoosting => false; // 봇은 부스트 안 함 (단순화)
+        
+        /// <summary>AI 봇은 항상 공격 모드 (항상 터널 생성).</summary>
+        public bool IsAttacking => true;
 
 
 
@@ -55,6 +58,10 @@ namespace Player
 
             _settings = GameManager.Instance.Settings;
             _targetAngle = Random.Range(0f, 360f);
+
+            // AI 봇은 항상 터널 생성 (Stealth & Ambush: AI는 항상 Assault 모드)
+            var tunnel = GetComponent<Tunnel.TunnelGenerator>();
+            if (tunnel != null) tunnel.SetDigging(true);
         }
 
         private void Update()
@@ -173,7 +180,8 @@ namespace Player
             // 현재 마스크 방식에서는 Collider 기반 충돌이 발생하지 않음.
         }
 
-        private void Die()
+        /// <summary>사망 처리 (IDigger 구현).</summary>
+        public void Die()
         {
             _isDead = true;
             CurrentSpeed = 0f;

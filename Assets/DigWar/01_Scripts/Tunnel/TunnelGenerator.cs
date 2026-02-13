@@ -34,7 +34,10 @@ namespace Tunnel
             }
 
             _lastPosition = transform.position;
-            _isDigging = true; // 시작부터 땅파기
+            // [Stealth & Ambush] 기본값 OFF.
+            // PlayerController가 LMB 입력에 따라 SetDigging()으로 제어.
+            // AIController는 Start()에서 SetDigging(true)를 호출.
+            _isDigging = false;
         }
 
         private void Update()
@@ -74,7 +77,8 @@ namespace Tunnel
         }
 
         /// <summary>
-        /// 땅파기 일시 정지/재개
+        /// 땅파기 일시 정지/재개.
+        /// [Stealth & Ambush] 즉시 Dig하지 않고, Update 루프에서 이동 후 자연스럽게 찍히도록 함.
         /// </summary>
         public void SetDigging(bool isDigging)
         {
@@ -82,7 +86,7 @@ namespace Tunnel
             if (isDigging)
             {
                 _lastPosition = transform.position;
-                Dig(transform.position); // 재개 즉시 한번 찍음
+                // 즉시 Dig 호출 제거 — Update에서 이동 후 자연스럽게 찍힘
             }
         }
     }

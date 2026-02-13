@@ -8,6 +8,13 @@ namespace Player
     {
         float CurrentSpeed { get; }
         bool IsBoosting { get; }
+        
+        /// <summary>공격 모드(Assault) 여부. 터널 생성 + 처치 가능 상태.</summary>
+        bool IsAttacking { get; }
+        
         void AddScore(float amount);
+        
+        /// <summary>사망 처리.</summary>
+        void Die();
     }
 }
