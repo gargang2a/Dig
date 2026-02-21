@@ -20,6 +20,14 @@ namespace Tunnel
         private float _currentWidth = 1.0f;
         private bool _isDigging = false;
 
+        private void Awake()
+        {
+            if (_maskManager == null)
+            {
+                _maskManager = TunnelMaskManager.Instance;
+            }
+        }
+
         private void Start()
         {
             if (_maskManager == null)
@@ -34,10 +42,9 @@ namespace Tunnel
             }
 
             _lastPosition = transform.position;
-            // [Stealth & Ambush] 기본값 OFF.
-            // PlayerController가 LMB 입력에 따라 SetDigging()으로 제어.
-            // AIController는 Start()에서 SetDigging(true)를 호출.
-            _isDigging = false;
+            // NOTE: _isDigging은 여기서 초기화하지 않음.
+            // AIController.Start()에서 SetDigging(true)를 먼저 호출했을 수 있으므로
+            // 덮어쓰면 봇의 터널 생성이 안 됨.
         }
 
         private void Update()

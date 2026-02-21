@@ -45,6 +45,10 @@ namespace Player
             }
 
             _settings = GameManager.Instance.Settings;
+
+            // 봇과 동일하게 항상 터널 생성
+            if (_tunnelGen != null)
+                _tunnelGen.SetDigging(true);
         }
 
         private void Update()
@@ -86,12 +90,8 @@ namespace Player
 
         private void HandleInput()
         {
-            bool wasAttacking = _isAttacking;
             _isAttacking = Input.GetMouseButton(0);
-
-            // [Stealth & Ambush] 상태 전환 시에만 터널 토글 (매 프레임 호출 방지)
-            if (_tunnelGen != null && wasAttacking != _isAttacking)
-                _tunnelGen.SetDigging(_isAttacking);
+            // 터널은 항상 생성 (봇과 동일). LMB는 부스트/공격 전용.
         }
 
         /// <summary>

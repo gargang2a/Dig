@@ -194,12 +194,24 @@ namespace Player
 
         private void SetupRenderer(GameObject go, int sortingOrder)
         {
-            var shader = Shader.Find("Sprites/Default")
-                ?? Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default");
+            // URP 셰이더를 우선 탐색 (Sprites/Default는 URP에서 없을 수 있음)
+            var shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default")
+                ?? Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                ?? Shader.Find("Sprites/Default");
+
             var renderer = go.GetComponent<ParticleSystemRenderer>();
             if (renderer == null) renderer = go.AddComponent<ParticleSystemRenderer>();
-            
-            renderer.material = new Material(shader);
+
+            if (shader != null)
+            {
+                renderer.material = new Material(shader);
+            }
+            else
+            {
+                // 모든 셰이더를 못 찾으면 기본 파티클 머티리얼 사용
+                renderer.material = new Material(Shader.Find("Particles/Standard Unlit"));
+            }
+
             renderer.sortingOrder = sortingOrder;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
         }

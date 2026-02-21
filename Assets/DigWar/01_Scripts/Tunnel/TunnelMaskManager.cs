@@ -7,13 +7,16 @@ namespace Tunnel
 {
     /// <summary>
     /// 터널 마스크 텍스처(RenderTexture)를 관리하고, 
-    /// 땅을 파는(DrawHole) 기능을 제공한다.
+    /// 땅을 파는(DrawHole) 및 흙을 덮는(EraseHole) 기능을 제공한다.
     /// </summary>
     public class TunnelMaskManager : MonoBehaviour
     {
+        // --- Singleton ---
+        public static TunnelMaskManager Instance { get; private set; }
         [Header("Settings")]
         [SerializeField] private int _textureResolution = 2048;
         [SerializeField] private Shader _brushShader;
+        [SerializeField] private Shader _eraserShader;
         [Tooltip("터널 바닥 텍스처 (어두운 암석/흙)")]
         [SerializeField] private Texture _floorTexture;
 
@@ -32,6 +35,7 @@ namespace Tunnel
         // 전역 마스크 텍스처
         private RenderTexture _maskTexture;
         private Material _brushMaterial;
+        private Material _eraserMaterial;
 
         // 맵 정보 (좌표 변환용)
         private float _mapRadius;
@@ -41,6 +45,14 @@ namespace Tunnel
         // A2 Fix: Awake에서 RT 초기화 (TunnelGenerator.Start()보다 먼저 실행 보장)
         private void Awake()
         {
+            // Singleton
+            if (Instance != null && Instance != this)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            Instance = this;
+
             InitializeTexture();
         }
 
@@ -56,17 +68,24 @@ namespace Tunnel
                 _maskTexture.Release();
                 Destroy(_maskTexture);
             }
-            // C2 Fix: 브러쉬 머티리얼 메모리 누수 방지
+            // C2 Fix: 머티리얼 메모리 누수 방지
             if (_brushMaterial != null)
                 Destroy(_brushMaterial);
+            if (_eraserMaterial != null)
+                Destroy(_eraserMaterial);
+
+            if (Instance == this) Instance = null;
         }
 
         private void InitializeTexture()
         {
             if (_brushShader == null)
                 _brushShader = Shader.Find("DigWar/TunnelBrush");
+            if (_eraserShader == null)
+                _eraserShader = Shader.Find("DigWar/TunnelEraser");
 
             _brushMaterial = new Material(_brushShader);
+            _eraserMaterial = new Material(_eraserShader);
 
             // R8: 단일 채널(Red)만 필요 (메모리 절약)
             _maskTexture = new RenderTexture(_textureResolution, _textureResolution, 0, RenderTextureFormat.R8);
@@ -125,6 +144,7 @@ namespace Tunnel
             public float u, v, uvRadius;
         }
         private readonly List<HoleData> _pendingHoles = new List<HoleData>(32);
+        private readonly List<HoleData> _pendingErases = new List<HoleData>(16);
 
         /// <summary>
         /// 특정 위치에 구멍을 낸다 (큐에 추가 → LateUpdate에서 일괄 렌더링).
@@ -140,11 +160,34 @@ namespace Tunnel
             _pendingHoles.Add(new HoleData { u = u, v = v, uvRadius = uvRadius });
         }
 
+        /// <summary>
+        /// 특정 위치의 터널을 흙으로 덮는다 (Sandworm 전용).
+        /// 큐에 추가 → LateUpdate에서 일괄 렌더링.
+        /// </summary>
+        public void EraseHole(Vector2 worldPos, float radius)
+        {
+            if (_maskTexture == null) return;
+
+            float u = (worldPos.x - _mapOffset) / _mapSize;
+            float v = (worldPos.y - _mapOffset) / _mapSize;
+            float uvRadius = radius / _mapSize;
+
+            _pendingErases.Add(new HoleData { u = u, v = v, uvRadius = uvRadius });
+        }
+
         private void LateUpdate()
         {
-            if (_pendingHoles.Count == 0) return;
-            FlushHoles();
-            _pendingHoles.Clear();
+            if (_pendingHoles.Count > 0)
+            {
+                FlushHoles();
+                _pendingHoles.Clear();
+            }
+
+            if (_pendingErases.Count > 0)
+            {
+                FlushErases();
+                _pendingErases.Clear();
+            }
         }
 
         /// <summary>
@@ -166,6 +209,39 @@ namespace Tunnel
                 float left = h.u - h.uvRadius;
                 float right = h.u + h.uvRadius;
                 float top = h.v + h.uvRadius;
+                float bottom = h.v - h.uvRadius;
+
+                GL.TexCoord2(0, 0); GL.Vertex3(left, bottom, 0);
+                GL.TexCoord2(0, 1); GL.Vertex3(left, top, 0);
+                GL.TexCoord2(1, 1); GL.Vertex3(right, top, 0);
+                GL.TexCoord2(1, 0); GL.Vertex3(right, bottom, 0);
+            }
+
+            GL.End();
+            GL.PopMatrix();
+
+            RenderTexture.active = prev;
+        }
+
+        /// <summary>
+        /// 큐에 쌓인 모든 '지우기(흙 덮기)'를 한 번의 GL 세션에서 일괄 렌더링.
+        /// </summary>
+        private void FlushErases()
+        {
+            RenderTexture prev = RenderTexture.active;
+            RenderTexture.active = _maskTexture;
+
+            GL.PushMatrix();
+            GL.LoadOrtho();
+            _eraserMaterial.SetPass(0);
+            GL.Begin(GL.QUADS);
+
+            for (int i = 0; i < _pendingErases.Count; i++)
+            {
+                var h = _pendingErases[i];
+                float left  = h.u - h.uvRadius;
+                float right = h.u + h.uvRadius;
+                float top   = h.v + h.uvRadius;
                 float bottom = h.v - h.uvRadius;
 
                 GL.TexCoord2(0, 0); GL.Vertex3(left, bottom, 0);

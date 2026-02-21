@@ -46,9 +46,9 @@ namespace Player
 
         [Header("Level 3: Game Juice")]
         [Tooltip("부스트 잔상 생성 간격 (초)")]
-        [SerializeField] private float _afterimageInterval = 0.1f;
+        [SerializeField] private float _afterimageInterval = 0.2f;
         [Tooltip("잔상 수명 (초)")]
-        [SerializeField] private float _afterimageLifetime = 0.3f;
+        [SerializeField] private float _afterimageLifetime = 0.15f;
 
         // === Shader Property IDs ===
         private static readonly int PROP_SPEED = Shader.PropertyToID("_Speed");
@@ -73,6 +73,7 @@ namespace Player
 
         // Level 3
         private float _afterimageTimer;
+        private bool _isPlayer;
         private Vector3 _originalCameraPos; // 카메라 흔들림 복구용 (Simple implementation)
 
         private void Awake()
@@ -89,13 +90,18 @@ namespace Player
             if (_digger == null)
                 _digger = GetComponent<IDigger>();
 
+            // 봇(AI)에서는 잔상 비활성화 (IsAttacking이 항상 true라 Ghost가 무한 생성됨)
+            _isPlayer = GetComponentInParent<PlayerController>() != null
+                     || GetComponent<PlayerController>() != null;
+
             _prevAngle = transform.eulerAngles.z;
         }
 
         private void Start()
         {
-            if (_enableDrillLines)
-                CreateDrillSpinLines();
+            // [NOTE] Drill Spin Lines는 URP 환경에서 렌더링 문제(막대기처럼 보임)가 있어 비활성화.
+            // 추후 드릴 진화 시스템에서 SpriteRenderer 기반으로 재구현 예정.
+            _enableDrillLines = false;
         }
 
         private void LateUpdate()
@@ -111,8 +117,8 @@ namespace Player
             UpdateDrillSpin(normalizedSpeed, isAttacking);
             UpdateBoostPunch(isAttacking);
             
-            // Level 3
-            UpdateAfterimage(isAttacking);
+            // Level 3 (플레이어만)
+            if (_isPlayer) UpdateAfterimage(isAttacking);
         }
 
         // ===============================================================
@@ -260,7 +266,7 @@ namespace Player
 
             var sr = ghostObj.AddComponent<SpriteRenderer>();
             sr.sprite = _spriteRenderer.sprite;
-            sr.color = new Color(1f, 1f, 1f, 0.4f); // 반투명
+            sr.color = new Color(1f, 1f, 1f, 0.2f); // 은은한 잔상
             sr.sortingOrder = _spriteRenderer.sortingOrder - 1;
 
             // 페이드 아웃 코루틴 대신 간단 스크립트 부착
@@ -276,31 +282,6 @@ namespace Player
         public void TriggerHitFlash()
         {
             _hitFlashTimer = _hitFlashDuration;
-        }
-    }
-
-    /// <summary>
-    /// 잔상 페이드 아웃용 (임시 클래스)
-    /// </summary>
-    public class GhostFade : MonoBehaviour
-    {
-        private float _lifetime;
-        private float _startAloha;
-        private SpriteRenderer _sr;
-
-        public void Setup(float lifetime)
-        {
-            _lifetime = lifetime;
-            _sr = GetComponent<SpriteRenderer>();
-            Destroy(gameObject, lifetime);
-        }
-
-        private void Update()
-        {
-            if (_sr == null) return;
-            Color c = _sr.color;
-            c.a -= (1f / _lifetime) * Time.deltaTime;
-            _sr.color = c;
         }
     }
 }

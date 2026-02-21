@@ -1421,7 +1421,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &189313830
 RectTransform:
   m_ObjectHideFlags: 0
@@ -3358,7 +3358,7 @@ SpriteRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 10754, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2100000, guid: 6e579a28977c49e49860adc5f41e1f7b, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -7889,8 +7889,8 @@ GameObject:
   - component: {fileID: 1900012250}
   - component: {fileID: 1900012251}
   - component: {fileID: 1900012252}
+  - component: {fileID: 1900012255}
   - component: {fileID: 1900012254}
-  - component: {fileID: 1900012253}
   m_Layer: 0
   m_Name: Player
   m_TagString: Untagged
@@ -8001,10 +8001,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 045b3fef773582540a5fd70aefd90da4, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _dirtColor: {r: 0.36477977, g: 0.21580967, b: 0.08144451, a: 1}
+  _dirtColor: {r: 0.55, g: 0.35, b: 0.17, a: 1}
   _dirtColorAlt: {r: 0.7, g: 0.5, b: 0.25, a: 1}
-  _emissionRate: 60
-  _boostEmissionMultiplier: 4
+  _emissionRate: 30
+  _boostEmissionMultiplier: 3
+  _tailColor: {r: 0.9, g: 0.9, b: 0.9, a: 0.2}
+  _tailEmissionRate: 15
 --- !u!114 &1900012251
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8034,26 +8036,6 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _maskManager: {fileID: 1578088743}
   _stepDistance: 0.2
---- !u!114 &1900012253
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1900012244}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5bffa287b68a9d64a98085c56e09df4a, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  _minDistance: 0.5
-  _maxPoints: 200
-  _intersectionCheckDelay: 1
-  _enemyLayer:
-    serializedVersion: 2
-    m_Bits: 1
-  _lineColor: {r: 1, g: 0, b: 0, a: 1}
-  _lineWidth: 0.2
 --- !u!120 &1900012254
 LineRenderer:
   serializedVersion: 2
@@ -8062,7 +8044,7 @@ LineRenderer:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1900012244}
-  m_Enabled: 1
+  m_Enabled: 0
   m_CastShadows: 1
   m_ReceiveShadows: 1
   m_DynamicOccludee: 1
@@ -8158,6 +8140,33 @@ LineRenderer:
   m_UseWorldSpace: 1
   m_Loop: 0
   m_ApplyActiveColorSpace: 1
+--- !u!114 &1900012255
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1900012244}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7fa42e91d4c19184dad10a593eaf887e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _spriteRenderer: {fileID: 692415223}
+  _bodyTransform: {fileID: 692415222}
+  _maxSpeedReference: 15
+  _hitFlashDuration: 0.15
+  _maxLeanAngle: 15
+  _leanSmoothing: 8
+  _enableDrillLines: 1
+  _drillLineColor: {r: 0.8, g: 0.8, b: 0.8, a: 0.5}
+  _drillOffsetY: 0.4
+  _drillRadius: 0.15
+  _drillSpinSpeed: 720
+  _boostPunchScale: 0.15
+  _punchDecay: 10
+  _afterimageInterval: 0.1
+  _afterimageLifetime: 0.3
 --- !u!1 &1945782439
 GameObject:
   m_ObjectHideFlags: 0
