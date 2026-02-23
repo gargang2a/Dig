@@ -106,6 +106,88 @@ function Export-LogSlices {
     }
 }
 
+function Read-LinesSafe {
+    param([string]$Path)
+
+    if (-not (Test-Path -Path $Path -PathType Leaf)) {
+        return @()
+    }
+
+    $raw = Get-Content -Path $Path -Encoding UTF8
+    if ($null -eq $raw) { return @() }
+    if ($raw -is [string]) { return @($raw) }
+    return @($raw)
+}
+
+function Get-SliceRoleSignals {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Slice
+    )
+
+    $kpiLines = @(Read-LinesSafe -Path $Slice.KpiPath)
+    $networkLines = @(Read-LinesSafe -Path $Slice.NetworkPath)
+
+    $hostMode = @($kpiLines | Where-Object { $_ -match "\[QA\]\[KPI\].*mode=Host" }).Count
+    $clientMode = @($kpiLines | Where-Object { $_ -match "\[QA\]\[KPI\].*mode=Client" }).Count
+    $hostContext = @($networkLines | Where-Object { $_ -match "AutoStart Policy => Context=EditorOriginal" }).Count
+    $cloneContext = @($networkLines | Where-Object { $_ -match "AutoStart Policy => Context=EditorClone" }).Count
+    $serverStarted = @($networkLines | Where-Object { $_ -match "Server started\. MaxConnections=24" }).Count
+
+    return [PSCustomObject]@{
+        HostScore = ($hostMode * 3) + ($hostContext * 2) + $serverStarted
+        ClientScore = ($clientMode * 3) + ($cloneContext * 2)
+        HostMode = $hostMode
+        ClientMode = $clientMode
+        HostContext = $hostContext
+        CloneContext = $cloneContext
+        ServerStarted = $serverStarted
+    }
+}
+
+function Swap-HostClientArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SessionDir
+    )
+
+    $suffixes = @("qa_kpi.log", "network.log", "errors.log", "warnings.log")
+    foreach ($suffix in $suffixes) {
+        $hostPath = Join-Path -Path $SessionDir -ChildPath ("host_{0}" -f $suffix)
+        $clientPath = Join-Path -Path $SessionDir -ChildPath ("client_{0}" -f $suffix)
+        if (-not (Test-Path -Path $hostPath -PathType Leaf)) { continue }
+        if (-not (Test-Path -Path $clientPath -PathType Leaf)) { continue }
+
+        $tmpPath = Join-Path -Path $SessionDir -ChildPath ("_swap_tmp_{0}" -f $suffix)
+        Move-Item -Path $hostPath -Destination $tmpPath -Force
+        Move-Item -Path $clientPath -Destination $hostPath -Force
+        Move-Item -Path $tmpPath -Destination $clientPath -Force
+    }
+}
+
+function Normalize-SliceArtifacts {
+    param(
+        [Parameter(Mandatory = $true)]
+        [psobject]$Slice,
+        [Parameter(Mandatory = $true)]
+        [string]$Prefix,
+        [Parameter(Mandatory = $true)]
+        [string]$SessionDir
+    )
+
+    $Slice.Prefix = $Prefix
+    $Slice.KpiPath = Join-Path -Path $SessionDir -ChildPath ("{0}_qa_kpi.log" -f $Prefix)
+    $Slice.NetworkPath = Join-Path -Path $SessionDir -ChildPath ("{0}_network.log" -f $Prefix)
+    $Slice.ErrorPath = Join-Path -Path $SessionDir -ChildPath ("{0}_errors.log" -f $Prefix)
+    $Slice.WarningPath = Join-Path -Path $SessionDir -ChildPath ("{0}_warnings.log" -f $Prefix)
+
+    $Slice.KpiCount = @(Read-LinesSafe -Path $Slice.KpiPath).Count
+    $Slice.NetworkCount = @(Read-LinesSafe -Path $Slice.NetworkPath).Count
+    $Slice.ErrorCount = @(Read-LinesSafe -Path $Slice.ErrorPath).Count
+    $Slice.WarningCount = @(Read-LinesSafe -Path $Slice.WarningPath).Count
+    $Slice.KpiSummary = ""
+}
+
 if ([string]::IsNullOrWhiteSpace($SessionId)) {
     $SessionId = Get-Date -Format "yyyy-MM-dd_HHmmss"
 }
@@ -133,6 +215,42 @@ if ($resolvedClientPath) {
         -SessionDir $sessionDir `
         -StartAfterPattern $StartAfterPattern `
         -TailLineCount $TailLineCount
+}
+
+$roleNormalization = "none"
+$hostSignals = Get-SliceRoleSignals -Slice $hostSlice
+$clientSignals = [PSCustomObject]@{
+    HostScore = 0
+    ClientScore = 0
+    HostMode = 0
+    ClientMode = 0
+    HostContext = 0
+    CloneContext = 0
+    ServerStarted = 0
+}
+if ($clientSlice) {
+    $clientSignals = Get-SliceRoleSignals -Slice $clientSlice
+
+    $shouldSwap = (
+        ($clientSignals.HostScore -gt $hostSignals.HostScore) -and
+        ($hostSignals.ClientScore -ge $clientSignals.ClientScore)
+    )
+
+    if ($shouldSwap) {
+        Swap-HostClientArtifacts -SessionDir $sessionDir
+
+        $tmp = $hostSlice
+        $hostSlice = $clientSlice
+        $clientSlice = $tmp
+
+        Normalize-SliceArtifacts -Slice $hostSlice -Prefix "host" -SessionDir $sessionDir
+        Normalize-SliceArtifacts -Slice $clientSlice -Prefix "client" -SessionDir $sessionDir
+
+        $roleNormalization = "swapped(host<->client)"
+
+        $hostSignals = Get-SliceRoleSignals -Slice $hostSlice
+        $clientSignals = Get-SliceRoleSignals -Slice $clientSlice
+    }
 }
 
 if (-not $SkipKpiSummary) {
@@ -209,12 +327,20 @@ $report = @"
 - SessionDir: $sessionDir
 - StartAfterPattern: $StartAfterPattern
 - TailLineCount: $TailLineCount
+- RoleNormalization: $roleNormalization
 
 ## Source Stats
 
 | Source | Path | KPI | Network | Errors | Warnings |
 | :--- | :--- | ---: | ---: | ---: | ---: |
 $($sourceRows -join [Environment]::NewLine)
+
+## Role Signal Scores
+
+| Slice | HostScore | ClientScore | hostMode | clientMode | hostContext | cloneContext | serverStarted |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| host | $($hostSignals.HostScore) | $($hostSignals.ClientScore) | $($hostSignals.HostMode) | $($hostSignals.ClientMode) | $($hostSignals.HostContext) | $($hostSignals.CloneContext) | $($hostSignals.ServerStarted) |
+| client | $($clientSignals.HostScore) | $($clientSignals.ClientScore) | $($clientSignals.HostMode) | $($clientSignals.ClientMode) | $($clientSignals.HostContext) | $($clientSignals.CloneContext) | $($clientSignals.ServerStarted) |
 
 ## Artifacts
 

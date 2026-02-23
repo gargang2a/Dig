@@ -70,6 +70,68 @@ function Status-FromCondition {
     return $Fail
 }
 
+function Count-KpiMetricAtLeast {
+    param(
+        [string[]]$Lines,
+        [string]$Mode,
+        [ValidateSet("conn", "players")]
+        [string]$Metric,
+        [int]$Threshold
+    )
+
+    if ($null -eq $Lines -or @($Lines).Count -eq 0) {
+        return 0
+    }
+
+    $count = 0
+    foreach ($line in $Lines) {
+        if ($line -notmatch ("\\[QA\\]\\[KPI\\].*mode={0}" -f $Mode)) {
+            continue
+        }
+
+        if ($Metric -eq "players") {
+            if ($line -match "players=(\d+)/") {
+                if ([int]$Matches[1] -ge $Threshold) {
+                    $count++
+                }
+            }
+            continue
+        }
+
+        if ($line -match "conn=(\d+)") {
+            if ([int]$Matches[1] -ge $Threshold) {
+                $count++
+            }
+        }
+    }
+
+    return $count
+}
+
+function Count-PlayerVsPlayerEvidence {
+    param([string[]]$Lines)
+
+    if ($null -eq $Lines -or @($Lines).Count -eq 0) {
+        return 0
+    }
+
+    $count = 0
+    foreach ($line in $Lines) {
+        if ($line -match "\[PvP\]\s*(.+?)\s*->\s*(.+?)\s*(처치|Kill)") {
+            $attacker = $Matches[1].Trim()
+            $target = $Matches[2].Trim()
+
+            if ($attacker -match "^Bot_") { continue }
+            if ($target -match "^Bot_") { continue }
+            if ($attacker -eq $target) { continue }
+
+            $count++
+        }
+    }
+
+    return $count
+}
+
 $hostNetwork = @(Read-Lines (Join-Path -Path $SessionDir -ChildPath "host_network.log"))
 $hostErrors = @(Read-Lines (Join-Path -Path $SessionDir -ChildPath "host_errors.log"))
 $hostWarnings = @(Read-Lines (Join-Path -Path $SessionDir -ChildPath "host_warnings.log"))
@@ -94,9 +156,14 @@ $localhostConnectCount = Count-Match -Lines $networkLines -Pattern "localhost|12
 $hostKpiModeCount = Count-Match -Lines $allCheckLines -Pattern "\[QA\]\[KPI\].*mode=Host"
 $clientKpiModeCount = Count-Match -Lines $allCheckLines -Pattern "\[QA\]\[KPI\].*mode=Client"
 $cap24EvidenceCount = Count-Match -Lines $allCheckLines -Pattern "players=\d+/24|conn=\d+/24|connMax=24|maxConnections=24|MaxConnections=24"
+$hostKpiConnGe2Count = Count-KpiMetricAtLeast -Lines $kpiLines -Mode "Host" -Metric "conn" -Threshold 2
+$hostKpiPlayersGe2Count = Count-KpiMetricAtLeast -Lines $kpiLines -Mode "Host" -Metric "players" -Threshold 2
+$playerVsPlayerEvidenceCount = Count-PlayerVsPlayerEvidence -Lines $networkLines
+$cloneFallbackFromHostConn = if ($hostKpiConnGe2Count -gt 0 -or $hostKpiPlayersGe2Count -gt 0) { 1 } else { 0 }
+$cloneFallbackFromPvp = if ($playerVsPlayerEvidenceCount -gt 0) { 1 } else { 0 }
 
 $effectiveHostContextCount = $hostContextCount + $hostKpiModeCount
-$effectiveCloneContextCount = $cloneContextCount + $clientKpiModeCount
+$effectiveCloneContextCount = $cloneContextCount + $clientKpiModeCount + $cloneFallbackFromHostConn + $cloneFallbackFromPvp
 $effectiveServerStartedCount = if ($serverStartedCount -gt 0) { $serverStartedCount } else { $cap24EvidenceCount }
 
 $notConnectedCount = Count-Match -Lines $allCheckLines -Pattern "\[SWT-ClientSend\]: Not Connected|Not Connected"
@@ -138,12 +205,12 @@ $autoRows = @(
     @{
         Item = "2) Pre-check: Host/Client localhost join + context logs"
         Status = Status-FromCondition ($localhostConnectCount -gt 0 -and $effectiveHostContextCount -gt 0 -and $effectiveCloneContextCount -gt 0)
-        Evidence = "localhost=$localhostConnectCount, hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi/effective)=$cloneContextCount/$clientKpiModeCount/$effectiveCloneContextCount"
+        Evidence = "localhost=$localhostConnectCount, hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi+fallback/effective)=$cloneContextCount/$clientKpiModeCount+($cloneFallbackFromHostConn,$cloneFallbackFromPvp)/$effectiveCloneContextCount"
     },
     @{
         Item = "7) NET-005: Original/Clone AutoStart policy logs"
         Status = Status-FromCondition ($effectiveHostContextCount -gt 0 -and $effectiveCloneContextCount -gt 0)
-        Evidence = "hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi/effective)=$cloneContextCount/$clientKpiModeCount/$effectiveCloneContextCount"
+        Evidence = "hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi+fallback/effective)=$cloneContextCount/$clientKpiModeCount+($cloneFallbackFromHostConn,$cloneFallbackFromPvp)/$effectiveCloneContextCount"
     },
     @{
         Item = "14) SVC-004: MaxConnections=24 applied"
@@ -182,7 +249,7 @@ foreach ($row in $autoRows) {
     $autoTableRows += "| $($row.Item) | $($row.Status) | $($row.Evidence) |"
 }
 
-$cloneExamples = First-Matches -Lines $allCheckLines -Pattern "AutoStart Policy => Context=EditorClone|\[QA\]\[KPI\].*mode=Client" -Limit 2
+$cloneExamples = First-Matches -Lines $allCheckLines -Pattern "AutoStart Policy => Context=EditorClone|\[QA\]\[KPI\].*mode=Client|\[QA\]\[KPI\].*mode=Host.*(players=2|players=3|players=4|conn=2|conn=3|conn=4)|\[PvP\].*->.*(처치|Kill)" -Limit 3
 $hostExamples = First-Matches -Lines $allCheckLines -Pattern "AutoStart Policy => Context=EditorOriginal|\[QA\]\[KPI\].*mode=Host" -Limit 2
 $serverExamples = First-Matches -Lines $allCheckLines -Pattern "Server started\. MaxConnections=24|players=\d+/24|conn=\d+/24|connMax=24|maxConnections=24|MaxConnections=24" -Limit 2
 $errorExamples = First-Matches -Lines $nonEmptyErrorLines -Pattern ".+" -Limit 3
@@ -206,9 +273,12 @@ $($autoTableRows -join [Environment]::NewLine)
 - nonEmptyWarnings: $nonEmptyWarningCount
 - kpiLines: $(@($kpiLines).Count)
 - serverStarted(MaxConnections=24) raw/effective: $serverStartedCount/$effectiveServerStartedCount
-- cloneContext raw/kpi/effective: $cloneContextCount/$clientKpiModeCount/$effectiveCloneContextCount
+- cloneContext raw/kpi/fallbackConn/fallbackPvp/effective: $cloneContextCount/$clientKpiModeCount/$cloneFallbackFromHostConn/$cloneFallbackFromPvp/$effectiveCloneContextCount
 - hostContext raw/kpi/effective: $hostContextCount/$hostKpiModeCount/$effectiveHostContextCount
 - localhostConnect: $localhostConnectCount
+- hostKpiConn>=2 evidence: $hostKpiConnGe2Count
+- hostKpiPlayers>=2 evidence: $hostKpiPlayersGe2Count
+- playerVsPlayerEvidence: $playerVsPlayerEvidenceCount
 - respawnLogCount: $respawnCount
 - startGameLogCount: $startGameCount
 

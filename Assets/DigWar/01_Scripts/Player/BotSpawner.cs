@@ -22,10 +22,18 @@ namespace Player
         [Tooltip("Number of bots to spawn")]
         [SerializeField] private int _botCount = 3;
 
+        [Tooltip("서버에서 죽은 봇을 자동으로 보충한다.")]
+        [SerializeField] private bool _autoRespawnBots = true;
+
+        [Tooltip("봇 개수 보정 주기(초)")]
+        [SerializeField] private float _respawnCheckInterval = 0.5f;
+
         [Tooltip("Bot sprite")]
         [SerializeField] private Sprite _botSprite;
 
         private GameSettings _settings;
+        private int _nextBotIndex;
+        private float _nextRespawnCheckAt;
 
         // 봇 전용 assetId (Mirror가 스폰 핸들러를 식별하는 키)
         private const uint BOT_ASSET_ID = 10001;
@@ -56,11 +64,32 @@ namespace Player
 
             if (GameManager.Instance == null) return;
             _settings = GameManager.Instance.Settings;
+            _nextBotIndex = 0;
 
             for (int i = 0; i < _botCount; i++)
-                SpawnBot(i);
+                SpawnBot(_nextBotIndex++);
 
             Debug.Log($"[BotSpawner] 서버에서 봇 {_botCount}마리 네트워크 스폰 완료");
+        }
+
+        private void Update()
+        {
+            if (!NetworkServer.active || !_autoRespawnBots) return;
+            if (Time.time < _nextRespawnCheckAt) return;
+
+            _nextRespawnCheckAt = Time.time + Mathf.Max(0.1f, _respawnCheckInterval);
+
+            int activeServerBots = 0;
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            {
+                if (bot == null) continue;
+                if (!bot.isServer) continue;
+                activeServerBots++;
+            }
+
+            int deficit = _botCount - activeServerBots;
+            for (int i = 0; i < deficit; i++)
+                SpawnBot(_nextBotIndex++);
         }
 
         /// <summary>서버에서 봇을 조립하고 네트워크 스폰한다.</summary>

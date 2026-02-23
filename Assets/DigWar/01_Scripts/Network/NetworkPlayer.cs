@@ -60,6 +60,9 @@ namespace Network
         public override void OnStartLocalPlayer()
         {
             base.OnStartLocalPlayer();
+            if (_playerController == null)
+                _playerController = GetComponent<Player.PlayerController>();
+
             LocalPlayer = this;
             Player.PlayerController.RegisterLocal(_playerController != null ? _playerController : GetComponent<Player.PlayerController>());
 
@@ -84,7 +87,19 @@ namespace Network
         public override void OnStartServer()
         {
             base.OnStartServer();
+            _nextKillRequestAllowedAt = 0f;
             _syncedScale = ResolveScaleFromScore(Score);
+
+            if (!_killDistanceConfigLogged)
+            {
+                _killDistanceConfigLogged = true;
+                Debug.Log(
+                    "[PvP Config] " +
+                    $"botFailSafeBonus={BOT_KILL_FAILSAFE_BONUS:F2}, " +
+                    $"playerFailSafeBonus={PLAYER_KILL_FAILSAFE_BONUS:F2}, " +
+                    $"botFailSafeMax={MAX_BOT_KILL_FAILSAFE_DISTANCE:F2}, " +
+                    $"playerFailSafeMax={MAX_PLAYER_KILL_FAILSAFE_DISTANCE:F2}");
+            }
         }
 
         public override void OnStartClient()
@@ -121,6 +136,11 @@ namespace Network
         private void Update()
         {
             if (!isLocalPlayer) return;
+
+            if (_playerController == null)
+                _playerController = GetComponent<Player.PlayerController>();
+
+            TryHandleAutoRespawn();
             if (!CanSendCommands) return;
 
             SyncAssaultState();
@@ -177,19 +197,29 @@ namespace Network
         private bool _lastSentAssaultState;
         private float _nextKillRequestAllowedAt;
         private float _lastAssaultActivatedAt;
+        private float _autoRespawnReadyAt = -1f;
         private float _ignoreClientScoreSyncUntil;
         private const float SCORE_SYNC_INTERVAL = 0.3f;
         private const float ASSAULT_SYNC_INTERVAL = 0.1f;
         private const float SCORE_SYNC_GUARD_SECONDS = 0.4f;
         private const float KILL_REWARD_SCORE = 50f;
-        private const float KILL_REQUEST_COOLDOWN_SECONDS = 0.25f;
+        private const float KILL_REQUEST_COOLDOWN_SECONDS = 0.03f;
         private const float ASSAULT_STATE_GRACE_SECONDS = 0.35f;
         private const float BASE_KILL_RANGE_BUFFER = 0.35f;
         private const float RTT_KILL_RANGE_BUFFER_FACTOR = 3f;
         private const float MAX_RTT_KILL_RANGE_BUFFER = 0.7f;
         private const float BOT_KILL_RANGE_BONUS = 0.25f;
-        private const float MAX_KILL_RANGE_BUFFER = 1.25f;
+        private const float PLAYER_KILL_RANGE_BONUS = 0.35f;
+        private const float MAX_KILL_RANGE_BUFFER = 1.5f;
+        private const float BOT_KILL_FAILSAFE_BONUS = 3.2f;
+        private const float PLAYER_KILL_FAILSAFE_BONUS = 5.5f;
+        private const float MAX_BOT_KILL_FAILSAFE_DISTANCE = 5.2f;
+        private const float MAX_PLAYER_KILL_FAILSAFE_DISTANCE = 8.0f;
         private const float FALLBACK_COLLIDER_RADIUS = 0.3f;
+        private const float BASE_COLLIDER_CONTACT_TOLERANCE = 0.1f;
+        private const float PLAYER_CONTACT_TOLERANCE_BONUS = 0.1f;
+        private const float AUTO_RESPAWN_DELAY_SECONDS = 1.0f;
+        private static bool _killDistanceConfigLogged;
 
         // ===== Commands (클라이언트 -> 서버) =====
 
@@ -289,13 +319,17 @@ namespace Network
                 assaultReady = true;
             if (!assaultReady)
             {
-                Debug.LogWarning($"[PvP] Kill rejected: assault inactive ({PlayerName})");
+                Debug.LogWarning($"[PvP] Kill rejected: assault inactive ({ResolveDisplayName()})");
                 return;
             }
 
             if (Time.time < _nextKillRequestAllowedAt)
             {
-                Debug.LogWarning($"[PvP] Kill rejected: cooldown ({PlayerName})");
+                float remaining = Mathf.Max(0f, _nextKillRequestAllowedAt - Time.time);
+                int connectionId = connectionToClient != null ? connectionToClient.connectionId : -1;
+                Debug.LogWarning(
+                    $"[PvP] Kill rejected: cooldown ({ResolveDisplayName()}), " +
+                    $"remaining={remaining:F3}s, target={ResolveDisplayName(target)}, connId={connectionId}");
                 return;
             }
 
@@ -303,9 +337,17 @@ namespace Network
             if (targetPlayer != null)
             {
                 if (targetPlayer.IsDead) return;
-                if (!IsValidKillDistance(targetPlayer) && !HasColliderContact(target))
+
+                bool inStrictKillRange = IsValidKillDistance(targetPlayer);
+                bool hasColliderContact = HasColliderContact(target);
+                bool inFailSafeKillRange = !inStrictKillRange &&
+                                           !hasColliderContact &&
+                                           IsWithinKillFailSafeRange(target);
+                if (!inStrictKillRange && !hasColliderContact && !inFailSafeKillRange)
                 {
-                    Debug.LogWarning($"[PvP] Kill rejected: distance ({PlayerName} -> {targetPlayer.PlayerName})");
+                    Debug.LogWarning(
+                        $"[PvP] Kill rejected: distance ({ResolveDisplayName()} -> {ResolveDisplayName(target)}), " +
+                        $"{BuildKillDistanceDebugInfo(target)}");
                     return;
                 }
 
@@ -314,26 +356,36 @@ namespace Network
 
                 _nextKillRequestAllowedAt = Time.time + KILL_REQUEST_COOLDOWN_SECONDS;
                 ServerAddScore(KILL_REWARD_SCORE, playCollectSound: false);
-                Debug.Log($"[PvP] {PlayerName} -> {targetPlayer.PlayerName} 처치");
+                Debug.Log($"[PvP] {ResolveDisplayName()} -> {ResolveDisplayName(target)} 처치");
                 return;
             }
 
             var targetBot = target.GetComponent<NetworkBot>();
             if (targetBot != null)
             {
-                if (!IsValidKillDistance(target) && !HasColliderContact(target))
+                bool inStrictKillRange = IsValidKillDistance(target);
+                bool hasColliderContact = HasColliderContact(target);
+                bool inFailSafeKillRange = !inStrictKillRange &&
+                                           !hasColliderContact &&
+                                           IsWithinKillFailSafeRange(target);
+                if (!inStrictKillRange && !hasColliderContact && !inFailSafeKillRange)
                 {
-                    Debug.LogWarning($"[PvP] Kill rejected: distance ({PlayerName} -> {target.name})");
+                    Debug.LogWarning(
+                        $"[PvP] Kill rejected: distance ({ResolveDisplayName()} -> {ResolveDisplayName(target)}), " +
+                        $"{BuildKillDistanceDebugInfo(target)}");
                     return;
                 }
 
-                _nextKillRequestAllowedAt = Time.time + KILL_REQUEST_COOLDOWN_SECONDS;
                 var botDigger = target.GetComponent<Player.IDigger>();
                 if (botDigger == null) return;
+                var botController = target.GetComponent<Player.AIController>();
+                if (botController != null && botController.IsDead) return;
 
                 botDigger.Die();
+                if (botController != null && !botController.IsDead) return;
+                _nextKillRequestAllowedAt = Time.time + KILL_REQUEST_COOLDOWN_SECONDS;
                 ServerAddScore(KILL_REWARD_SCORE, playCollectSound: false);
-                Debug.Log($"[PvP] {PlayerName} -> {target.name} 처치");
+                Debug.Log($"[PvP] {ResolveDisplayName()} -> {ResolveDisplayName(target)} 처치");
             }
         }
 
@@ -352,7 +404,8 @@ namespace Network
             IsDead = true;
             _isAssaultActive = false;
             RpcDie();
-            Debug.Log($"[{source}] {killer} -> {PlayerName} 처치");
+            string resolvedKiller = string.IsNullOrWhiteSpace(killer) ? "Unknown" : killer.Trim();
+            Debug.Log($"[{source}] {resolvedKiller} -> {ResolveDisplayName()} 처치");
             return true;
         }
 
@@ -394,6 +447,9 @@ namespace Network
         private void OnIsDeadChanged(bool oldVal, bool newVal)
         {
             if (oldVal == true && newVal == false)
+                _autoRespawnReadyAt = -1f;
+
+            if (oldVal == true && newVal == false)
             {
                 // 사망 -> 리스폰 전이 시 원격 플레이어 비주얼만 복구한다.
                 if (!isLocalPlayer)
@@ -405,6 +461,35 @@ namespace Network
             }
         }
 
+        private void TryHandleAutoRespawn()
+        {
+            if (!Player.PlayerController.IsGlobalAutoModeEnabled)
+            {
+                _autoRespawnReadyAt = -1f;
+                return;
+            }
+
+            if (!IsDead)
+            {
+                _autoRespawnReadyAt = -1f;
+                return;
+            }
+
+            if (_playerController == null || !CanSendCommands)
+                return;
+
+            if (_autoRespawnReadyAt < 0f)
+                _autoRespawnReadyAt = Time.unscaledTime + AUTO_RESPAWN_DELAY_SECONDS;
+
+            if (Time.unscaledTime < _autoRespawnReadyAt)
+                return;
+
+            // 서버 반영까지 지연될 수 있으므로 재시도 간격을 유지한다.
+            _autoRespawnReadyAt = Time.unscaledTime + AUTO_RESPAWN_DELAY_SECONDS;
+            _playerController.Respawn();
+            CmdRespawn();
+        }
+
         private void OnSyncedScaleChanged(float oldScale, float newScale)
         {
             if (isLocalPlayer) return;
@@ -414,12 +499,7 @@ namespace Network
         [Server]
         private bool IsValidKillDistance(NetworkPlayer targetPlayer)
         {
-            float killRangeBuffer = ResolveKillRangeBuffer(targetPlayer != null ? targetPlayer.netIdentity : null);
-            float allowedDistance =
-                GetHitRadius(this) +
-                GetHitRadius(targetPlayer) +
-                killRangeBuffer;
-
+            float allowedDistance = ResolveAllowedKillDistance(targetPlayer);
             float sqrDistance = (targetPlayer.transform.position - transform.position).sqrMagnitude;
             return sqrDistance <= allowedDistance * allowedDistance;
         }
@@ -429,14 +509,102 @@ namespace Network
         {
             if (target == null) return false;
 
-            float killRangeBuffer = ResolveKillRangeBuffer(target);
-            float allowedDistance =
-                GetHitRadius(this) +
-                GetHitRadius(target) +
-                killRangeBuffer;
-
+            float allowedDistance = ResolveAllowedKillDistance(target);
             float sqrDistance = (target.transform.position - transform.position).sqrMagnitude;
             return sqrDistance <= allowedDistance * allowedDistance;
+        }
+
+        [Server]
+        private bool IsWithinKillFailSafeRange(NetworkIdentity target)
+        {
+            if (target == null) return false;
+
+            float strictAllowedDistance = ResolveAllowedKillDistance(target);
+            float bonus = ResolveFailSafeBonus(target);
+            float maxDistance = ResolveFailSafeMaxDistance(target);
+            float failSafeAllowedDistance = Mathf.Min(
+                maxDistance,
+                strictAllowedDistance + bonus);
+
+            float sqrDistance = (target.transform.position - transform.position).sqrMagnitude;
+            return sqrDistance <= failSafeAllowedDistance * failSafeAllowedDistance;
+        }
+
+        [Server]
+        private float ResolveAllowedKillDistance(NetworkPlayer targetPlayer)
+        {
+            float killRangeBuffer = ResolveKillRangeBuffer(targetPlayer != null ? targetPlayer.netIdentity : null);
+            return GetHitRadius(this) + GetHitRadius(targetPlayer) + killRangeBuffer;
+        }
+
+        [Server]
+        private float ResolveAllowedKillDistance(NetworkIdentity target)
+        {
+            if (target == null) return FALLBACK_COLLIDER_RADIUS;
+
+            float killRangeBuffer = ResolveKillRangeBuffer(target);
+            return GetHitRadius(this) + GetHitRadius(target) + killRangeBuffer;
+        }
+
+        [Server]
+        private string BuildKillDistanceDebugInfo(NetworkIdentity target)
+        {
+            if (target == null) return "target=null";
+
+            float strictAllowedDistance = ResolveAllowedKillDistance(target);
+            float bonus = ResolveFailSafeBonus(target);
+            float maxDistance = ResolveFailSafeMaxDistance(target);
+            float failSafeAllowedDistance = Mathf.Min(
+                maxDistance,
+                strictAllowedDistance + bonus);
+
+            float sqrDistance = (target.transform.position - transform.position).sqrMagnitude;
+            float distance = Mathf.Sqrt(Mathf.Max(0f, sqrDistance));
+            float rttMs = connectionToClient != null ? (float)connectionToClient.rtt * 1000f : 0f;
+
+            return
+                $"dist={distance:F3}, strict={strictAllowedDistance:F3}, failSafe={failSafeAllowedDistance:F3}, " +
+                $"bonus={bonus:F3}, failSafeMax={maxDistance:F3}, " +
+                $"rttMs={rttMs:F1}, attackerPos={transform.position}, targetPos={target.transform.position}";
+        }
+
+        [Server]
+        private static float ResolveFailSafeBonus(NetworkIdentity target)
+        {
+            if (target == null) return BOT_KILL_FAILSAFE_BONUS;
+            return target.GetComponent<NetworkPlayer>() != null
+                ? PLAYER_KILL_FAILSAFE_BONUS
+                : BOT_KILL_FAILSAFE_BONUS;
+        }
+
+        [Server]
+        private static float ResolveFailSafeMaxDistance(NetworkIdentity target)
+        {
+            if (target == null) return MAX_BOT_KILL_FAILSAFE_DISTANCE;
+            return target.GetComponent<NetworkPlayer>() != null
+                ? MAX_PLAYER_KILL_FAILSAFE_DISTANCE
+                : MAX_BOT_KILL_FAILSAFE_DISTANCE;
+        }
+
+        [Server]
+        private string ResolveDisplayName()
+        {
+            if (!string.IsNullOrWhiteSpace(PlayerName))
+                return PlayerName;
+
+            return name;
+        }
+
+        [Server]
+        private static string ResolveDisplayName(NetworkIdentity target)
+        {
+            if (target == null) return "null";
+
+            var targetPlayer = target.GetComponent<NetworkPlayer>();
+            if (targetPlayer != null && !string.IsNullOrWhiteSpace(targetPlayer.PlayerName))
+                return targetPlayer.PlayerName;
+
+            return target.name;
         }
 
         [Server]
@@ -452,6 +620,8 @@ namespace Network
 
             if (target != null && target.GetComponent<NetworkBot>() != null)
                 rangeBuffer += BOT_KILL_RANGE_BONUS;
+            else if (target != null && target.GetComponent<NetworkPlayer>() != null)
+                rangeBuffer += PLAYER_KILL_RANGE_BONUS;
 
             return Mathf.Min(MAX_KILL_RANGE_BUFFER, rangeBuffer);
         }
@@ -464,8 +634,12 @@ namespace Network
             Collider2D targetCollider = target.GetComponent<Collider2D>();
             if (myCollider == null || targetCollider == null) return false;
 
+            float tolerance = BASE_COLLIDER_CONTACT_TOLERANCE;
+            if (target.GetComponent<NetworkPlayer>() != null)
+                tolerance += PLAYER_CONTACT_TOLERANCE_BONUS;
+
             ColliderDistance2D distance = myCollider.Distance(targetCollider);
-            return distance.isOverlapped || distance.distance <= 0.05f;
+            return distance.isOverlapped || distance.distance <= tolerance;
         }
 
         [Server]

@@ -48,6 +48,13 @@ namespace Systems
 
         private void Update()
         {
+            if (_isGameOver && GameManager.Instance != null && GameManager.Instance.IsGameActive)
+            {
+                _isGameOver = false;
+                if (_panel != null)
+                    _panel.SetActive(false);
+            }
+
             if (_isGameOver && Input.GetKeyDown(KeyCode.Space))
                 Restart();
         }

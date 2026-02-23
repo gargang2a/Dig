@@ -31,8 +31,18 @@ namespace Player
         private bool _isDead;
         private float _nextNetworkKillRequestAt;
         private bool _debugMovementLocked;
+        private Vector3 _autoMoveTarget;
+        private float _nextAutoRetargetAt;
+        private float _autoRespawnAt = -1f;
 
         private const float NETWORK_KILL_REQUEST_INTERVAL = 0.1f;
+        private const float NETWORK_KILL_TARGET_SCAN_RADIUS = 8f;
+        private const float AUTO_MOVE_RETARGET_INTERVAL = 1.2f;
+        private const float AUTO_MOVE_REACH_DISTANCE = 1.0f;
+        private const float AUTO_RESPAWN_DELAY_SECONDS = 1.0f;
+        private const float AUTO_TARGET_MAX_SEARCH_DISTANCE = 40f;
+
+        private static bool _globalAutoModeEnabled;
 
         private void Awake()
         {
@@ -63,7 +73,13 @@ namespace Player
 
         private void Update()
         {
-            if (_isDead || !GameManager.Instance.IsGameActive) return;
+            bool autoModeActive = IsAutoModeActive;
+            if (_isDead || !GameManager.Instance.IsGameActive)
+            {
+                HandleAutoRespawnWhenDead(autoModeActive);
+                return;
+            }
+
             if (_debugMovementLocked)
             {
                 _isAttacking = false;
@@ -71,9 +87,14 @@ namespace Player
                 return;
             }
 
-            HandleInput();
-            Rotate();
-            Move();
+            if (autoModeActive)
+                RunAutoModeTick();
+            else
+            {
+                HandleInput();
+                Rotate();
+                Move();
+            }
 
             // 사운드 업데이트
             if (Systems.SoundManager.Instance != null)
@@ -109,11 +130,143 @@ namespace Player
                 LocalController = controller;
         }
 
+        public static bool IsGlobalAutoModeEnabled => _globalAutoModeEnabled;
+
+        public bool IsAutoModeActive => _globalAutoModeEnabled && IsLocalControllable();
+
+        public static void SetGlobalAutoModeEnabled(bool enabled)
+        {
+            if (_globalAutoModeEnabled == enabled) return;
+            _globalAutoModeEnabled = enabled;
+
+            foreach (PlayerController controller in _activeControllers)
+            {
+                if (controller == null) continue;
+                controller.OnAutoModeChanged(enabled);
+            }
+
+            Debug.Log($"[AutoTest] Player auto mode {(enabled ? "ON" : "OFF")}");
+        }
+
         private void TryPromoteAsLocal()
         {
             var networkPlayer = GetComponent<Network.NetworkPlayer>();
             if (networkPlayer == null || networkPlayer.isLocalPlayer)
                 LocalController = this;
+        }
+
+        private bool IsLocalControllable()
+        {
+            var networkPlayer = GetComponent<Network.NetworkPlayer>();
+            return networkPlayer == null || networkPlayer.isLocalPlayer;
+        }
+
+        private void OnAutoModeChanged(bool enabled)
+        {
+            if (!enabled)
+            {
+                _isAttacking = false;
+                _autoRespawnAt = -1f;
+            }
+
+            _nextAutoRetargetAt = 0f;
+        }
+
+        private void RunAutoModeTick()
+        {
+            Vector3 targetPosition = ResolveAutoMoveTarget();
+            RotateTowards(targetPosition);
+            _isAttacking = true;
+            Move();
+        }
+
+        private Vector3 ResolveAutoMoveTarget()
+        {
+            if (TryGetNearestAutoCombatTarget(out Transform target))
+            {
+                _autoMoveTarget = target.position;
+                _nextAutoRetargetAt = Time.time + 0.2f;
+                return _autoMoveTarget;
+            }
+
+            float reachedSqrDistance = AUTO_MOVE_REACH_DISTANCE * AUTO_MOVE_REACH_DISTANCE;
+            if (Time.time >= _nextAutoRetargetAt ||
+                (transform.position - _autoMoveTarget).sqrMagnitude <= reachedSqrDistance)
+            {
+                float patrolRadius = _settings != null ? _settings.MapRadius * 0.75f : 20f;
+                Vector2 patrolPoint = Random.insideUnitCircle * patrolRadius;
+                _autoMoveTarget = new Vector3(patrolPoint.x, patrolPoint.y, 0f);
+                _nextAutoRetargetAt = Time.time + AUTO_MOVE_RETARGET_INTERVAL;
+            }
+
+            return _autoMoveTarget;
+        }
+
+        private bool TryGetNearestAutoCombatTarget(out Transform targetTransform)
+        {
+            targetTransform = null;
+
+            var localNetworkPlayer = GetComponent<Network.NetworkPlayer>();
+            if (localNetworkPlayer == null)
+                return false;
+
+            float maxSearchSqrDistance = AUTO_TARGET_MAX_SEARCH_DISTANCE * AUTO_TARGET_MAX_SEARCH_DISTANCE;
+            float bestSqrDistance = maxSearchSqrDistance;
+
+            foreach (Network.NetworkPlayer player in Network.NetworkPlayer.ActivePlayers)
+            {
+                if (player == null || player == localNetworkPlayer) continue;
+                if (player.IsDead) continue;
+
+                float sqrDistance = (player.transform.position - transform.position).sqrMagnitude;
+                if (sqrDistance >= bestSqrDistance) continue;
+
+                bestSqrDistance = sqrDistance;
+                targetTransform = player.transform;
+            }
+
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            {
+                if (bot == null) continue;
+                var botController = bot.GetComponent<AIController>();
+                if (botController != null && botController.IsDead) continue;
+
+                float sqrDistance = (bot.transform.position - transform.position).sqrMagnitude;
+                if (sqrDistance >= bestSqrDistance) continue;
+
+                bestSqrDistance = sqrDistance;
+                targetTransform = bot.transform;
+            }
+
+            return targetTransform != null;
+        }
+
+        private void HandleAutoRespawnWhenDead(bool autoModeActive)
+        {
+            if (!_isDead)
+            {
+                _autoRespawnAt = -1f;
+                return;
+            }
+
+            if (!autoModeActive)
+            {
+                _autoRespawnAt = -1f;
+                return;
+            }
+
+            var networkPlayer = GetComponent<Network.NetworkPlayer>();
+            if (networkPlayer != null && networkPlayer.isLocalPlayer)
+                return; // NetworkPlayer가 CmdRespawn 경로를 담당한다.
+
+            if (_autoRespawnAt < 0f)
+                _autoRespawnAt = Time.unscaledTime + AUTO_RESPAWN_DELAY_SECONDS;
+
+            if (Time.unscaledTime < _autoRespawnAt)
+                return;
+
+            _autoRespawnAt = -1f;
+            Respawn();
         }
 
         /// <summary>
@@ -168,8 +321,12 @@ namespace Player
         {
             Vector3 mouseWorldPos = _mainCamera.ScreenToWorldPoint(Input.mousePosition);
             mouseWorldPos.z = 0f;
+            RotateTowards(mouseWorldPos);
+        }
 
-            Vector2 direction = mouseWorldPos - transform.position;
+        private void RotateTowards(Vector3 worldPosition)
+        {
+            Vector2 direction = worldPosition - transform.position;
             if (direction.sqrMagnitude < 0.01f) return;
 
             float targetAngle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f;
@@ -215,18 +372,15 @@ namespace Player
             Network.NetworkPlayer myNetPlayer = GetComponent<Network.NetworkPlayer>();
             bool isNetworkMode = myNetPlayer != null || NetworkClient.active || NetworkServer.active;
 
-            // 네트워크 모드에서는 서버 확정 경로만 사용한다.
-            NetworkIdentity targetIdentity = other.GetComponent<NetworkIdentity>();
-            if (targetIdentity == null)
-                targetIdentity = other.GetComponentInParent<NetworkIdentity>();
-
             if (isNetworkMode)
             {
                 if (myNetPlayer == null) return;
                 if (!myNetPlayer.isLocalPlayer) return;
                 if (!Network.NetworkPlayer.CanSendCommands) return;
-                if (targetIdentity == null) return;
                 if (Time.time < _nextNetworkKillRequestAt) return;
+
+                NetworkIdentity targetIdentity = ResolveNetworkKillTarget(myNetPlayer, other);
+                if (targetIdentity == null) return;
 
                 _nextNetworkKillRequestAt = Time.time + NETWORK_KILL_REQUEST_INTERVAL;
                 myNetPlayer.CmdRequestKill(targetIdentity);
@@ -252,6 +406,57 @@ namespace Player
             OnTriggerEnter2D(other);
         }
 
+        private NetworkIdentity ResolveNetworkKillTarget(Network.NetworkPlayer myNetPlayer, Collider2D triggerCollider)
+        {
+            if (myNetPlayer == null) return null;
+
+            float scale = Mathf.Max(1f, Mathf.Abs(transform.localScale.x));
+            float scanRadius = Mathf.Max(NETWORK_KILL_TARGET_SCAN_RADIUS, scale * 6f);
+            float maxSqrDistance = scanRadius * scanRadius;
+            NetworkIdentity selfIdentity = myNetPlayer.netIdentity;
+
+            NetworkIdentity bestTarget = null;
+            float bestSqrDistance = float.MaxValue;
+
+            void ConsiderCandidate(NetworkIdentity candidate)
+            {
+                if (candidate == null) return;
+                if (candidate == selfIdentity) return;
+                if (!candidate.gameObject.activeInHierarchy) return;
+
+                float sqrDistance = (candidate.transform.position - transform.position).sqrMagnitude;
+                if (sqrDistance > maxSqrDistance) return;
+                if (sqrDistance >= bestSqrDistance) return;
+
+                bestSqrDistance = sqrDistance;
+                bestTarget = candidate;
+            }
+
+            if (triggerCollider != null)
+            {
+                NetworkIdentity preferred = triggerCollider.GetComponent<NetworkIdentity>();
+                if (preferred == null)
+                    preferred = triggerCollider.GetComponentInParent<NetworkIdentity>();
+
+                ConsiderCandidate(preferred);
+            }
+
+            foreach (Network.NetworkPlayer player in Network.NetworkPlayer.ActivePlayers)
+            {
+                if (player == null || player == myNetPlayer) continue;
+                if (player.IsDead) continue;
+                ConsiderCandidate(player.netIdentity);
+            }
+
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            {
+                if (bot == null) continue;
+                ConsiderCandidate(bot.netIdentity);
+            }
+
+            return bestTarget;
+        }
+
         public void AddScore(float amount)
         {
             if (GameManager.Instance != null)
@@ -271,6 +476,8 @@ namespace Player
             if (_isDead) return;
             _isDead = true;
             CurrentSpeed = 0f;
+            _isAttacking = false;
+            _autoRespawnAt = -1f;
 
             // 로컬 플레이어만 GameOver UI 트리거
             var netPlayer = GetComponent<Network.NetworkPlayer>();
@@ -312,6 +519,8 @@ namespace Player
         {
             _isDead = false;
             _nextNetworkKillRequestAt = 0f;
+            _autoRespawnAt = -1f;
+            _isAttacking = false;
 
             float minScale = GameManager.Instance != null
                 ? GameManager.Instance.Settings.MinScale : 0.5f;
@@ -337,6 +546,8 @@ namespace Player
         {
             _isDead = false;
             _nextNetworkKillRequestAt = 0f;
+            _autoRespawnAt = -1f;
+            _isAttacking = false;
 
             // 랜덤 위치로 리스폰
             float mapRadius = GameManager.Instance != null

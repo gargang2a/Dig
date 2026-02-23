@@ -178,7 +178,7 @@ namespace Network
                     if (string.IsNullOrWhiteSpace(networkAddress))
                         networkAddress = defaultAddress;
 
-                    Debug.Log($"[Network] AutoStart Client connect => {networkAddress}");
+                    Debug.Log($"[Network] AutoStart Client connect => {ResolveClientEndpoint()}");
                     StartClient();
                     return;
 
@@ -291,6 +291,16 @@ namespace Network
             _pendingDisconnectReason = string.Empty;
         }
 
+        public override void OnClientError(TransportError error, string reason)
+        {
+            base.OnClientError(error, reason);
+            _pendingDisconnectReason = BuildClientTransportErrorReason(error, reason);
+
+            string rawReason = string.IsNullOrWhiteSpace(reason) ? "(empty)" : reason;
+            Debug.LogWarning(
+                $"[Network] Client transport error: {error} | endpoint={ResolveClientEndpoint()} | reason={rawReason}");
+        }
+
         private IEnumerator DisconnectNextFrame(NetworkConnectionToClient conn)
         {
             yield return null;
@@ -300,6 +310,42 @@ namespace Network
         private string BuildServerFullReason()
         {
             return $"서버 인원({maxConnections}명)이 가득 찼습니다. 잠시 후 다시 시도하세요.";
+        }
+
+        private string BuildClientTransportErrorReason(TransportError error, string reason)
+        {
+            string normalizedReason = string.IsNullOrWhiteSpace(reason)
+                ? string.Empty
+                : reason.ToLowerInvariant();
+            string endpoint = ResolveClientEndpoint();
+            string endpointLabel = string.IsNullOrWhiteSpace(endpoint) ? string.Empty : $" ({endpoint})";
+
+            if (error == TransportError.DnsResolve || normalizedReason.Contains("dns"))
+                return $"서버 주소를 찾을 수 없습니다{endpointLabel}. networkAddress를 확인하세요.";
+
+            if (error == TransportError.Timeout || normalizedReason.Contains("timeout"))
+                return $"서버 응답이 지연되어 연결에 실패했습니다{endpointLabel}. 잠시 후 다시 시도하세요.";
+
+            if (normalizedReason.Contains("refused") || normalizedReason.Contains("거부"))
+                return $"서버가 아직 열리지 않았거나 주소/포트가 다릅니다{endpointLabel}. Host를 먼저 실행하세요.";
+
+            return $"네트워크 오류로 서버 연결에 실패했습니다{endpointLabel}. 잠시 후 다시 시도하세요.";
+        }
+
+        private string ResolveClientEndpoint()
+        {
+            string address = string.IsNullOrWhiteSpace(networkAddress)
+                ? _defaultClientAddress
+                : networkAddress;
+            address = string.IsNullOrWhiteSpace(address) ? "localhost" : address.Trim();
+
+            ushort port = 0;
+            if (Transport.active is PortTransport activePortTransport)
+                port = activePortTransport.Port;
+            else if (transport is PortTransport managerPortTransport)
+                port = managerPortTransport.Port;
+
+            return port > 0 ? $"{address}:{port}" : address;
         }
 
         private void ApplyFreeMvpRuntimeProfile(bool logWarnings)

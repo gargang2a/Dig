@@ -45,6 +45,7 @@ namespace Network
         private GameSettings _settings;
         private float _scoreSyncTimer;
         private const float SCORE_SYNC_INTERVAL = 0.5f;
+        private const float DEFAULT_MIN_SCALE = 0.5f;
 
         // Client-side smoothing to avoid visible scale stepping.
         private const float REMOTE_SCALE_SMOOTH_TIME = 0.12f;
@@ -60,6 +61,7 @@ namespace Network
             if (_ai != null)
                 _ai.enabled = true;
 
+            Score = SanitizeScore(_ai != null ? _ai.Score : Score);
             _syncedScale = ResolveScaleFromScore(Score);
         }
 
@@ -85,7 +87,7 @@ namespace Network
             }
 
             ApplyVisuals(BotIndex);
-            float initialScale = _syncedScale > 0f ? _syncedScale : ResolveScaleFromScore(Score);
+            float initialScale = ResolveSafeScale(_syncedScale > 0f ? _syncedScale : ResolveScaleFromScore(Score), ResolveScaleFallback());
             _targetRemoteScale = initialScale;
             ApplyRemoteScaleImmediate(initialScale);
         }
@@ -104,7 +106,7 @@ namespace Network
                 if (_scoreSyncTimer <= 0f)
                 {
                     _scoreSyncTimer = SCORE_SYNC_INTERVAL;
-                    Score = Mathf.Max(0f, _ai.Score);
+                    Score = SanitizeScore(_ai.Score);
                     _syncedScale = ResolveScaleFromScore(Score);
                 }
             }
@@ -125,7 +127,8 @@ namespace Network
             if (isServer)
                 return;
 
-            _targetRemoteScale = newScale > 0f ? newScale : ResolveScaleFromScore(Score);
+            float fallbackScale = ResolveScaleFromScore(Score);
+            _targetRemoteScale = ResolveSafeScale(newScale > 0f ? newScale : fallbackScale, ResolveScaleFallback());
         }
 
         private void ApplyVisuals(int index)
@@ -140,23 +143,41 @@ namespace Network
 
         private void ApplyRemoteScaleImmediate(float scale)
         {
-            if (isServer || scale <= 0f)
+            if (isServer)
                 return;
 
-            transform.localScale = Vector3.one * scale;
+            float safeScale = ResolveSafeScale(scale, ResolveScaleFallback());
+            transform.localScale = Vector3.one * safeScale;
         }
 
         private void UpdateRemoteScaleSmoothing()
         {
-            if (_targetRemoteScale <= 0f)
-                return;
+            float fallbackScale = ResolveScaleFallback();
+
+            if (!IsFinitePositive(_targetRemoteScale))
+            {
+                _targetRemoteScale = fallbackScale;
+                _remoteScaleVelocity = 0f;
+            }
 
             float currentScale = transform.localScale.x;
+            if (!IsFinitePositive(currentScale))
+            {
+                currentScale = fallbackScale;
+                transform.localScale = Vector3.one * currentScale;
+            }
+
             float nextScale = Mathf.SmoothDamp(
                 currentScale,
                 _targetRemoteScale,
                 ref _remoteScaleVelocity,
                 REMOTE_SCALE_SMOOTH_TIME);
+
+            if (!IsFinitePositive(nextScale))
+            {
+                nextScale = _targetRemoteScale;
+                _remoteScaleVelocity = 0f;
+            }
 
             if (Mathf.Abs(nextScale - currentScale) <= 0.0001f)
                 return;
@@ -172,13 +193,56 @@ namespace Network
             if (_settings == null)
             {
                 float fallbackScale = Mathf.Abs(transform.localScale.x);
-                return Mathf.Max(0.1f, fallbackScale);
+                return ResolveSafeScale(fallbackScale, DEFAULT_MIN_SCALE);
             }
 
-            float safeScorePerUnit = Mathf.Max(0.0001f, _settings.ScorePerSizeUnit);
-            float growth = Mathf.Log(1f + Mathf.Max(0f, score) / safeScorePerUnit);
-            float rawScale = _settings.MinScale + growth;
-            return Mathf.Clamp(rawScale, _settings.MinScale, _settings.MaxScale);
+            float minScale = ResolveSafeScale(_settings.MinScale, DEFAULT_MIN_SCALE);
+            float maxScale = ResolveSafeScale(_settings.MaxScale, minScale);
+            maxScale = Mathf.Max(minScale, maxScale);
+
+            float safeScorePerUnit = ResolveSafeScale(_settings.ScorePerSizeUnit, 100f);
+            safeScorePerUnit = Mathf.Max(0.0001f, safeScorePerUnit);
+
+            float safeScore = SanitizeScore(score);
+            float growth = Mathf.Log(1f + safeScore / safeScorePerUnit);
+            if (!IsFinite(growth))
+                growth = 0f;
+
+            float rawScale = minScale + growth;
+            return ResolveSafeScale(Mathf.Clamp(rawScale, minScale, maxScale), minScale);
+        }
+
+        private float ResolveScaleFallback()
+        {
+            float currentScale = Mathf.Abs(transform.localScale.x);
+            return ResolveSafeScale(currentScale, DEFAULT_MIN_SCALE);
+        }
+
+        private static float SanitizeScore(float score)
+        {
+            if (!IsFinite(score))
+                return 0f;
+
+            return Mathf.Max(0f, score);
+        }
+
+        private static float ResolveSafeScale(float value, float fallback)
+        {
+            float safeFallback = (!IsFinitePositive(fallback) ? DEFAULT_MIN_SCALE : Mathf.Max(0.1f, fallback));
+            if (!IsFinitePositive(value))
+                return safeFallback;
+
+            return Mathf.Max(0.1f, value);
+        }
+
+        private static bool IsFinitePositive(float value)
+        {
+            return IsFinite(value) && value > 0f;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 }

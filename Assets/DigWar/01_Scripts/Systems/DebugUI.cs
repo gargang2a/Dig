@@ -26,6 +26,7 @@ namespace Systems
         private const KeyCode ALT_SNAPSHOT_KEY = KeyCode.Alpha9;
         private const KeyCode ALT_MOVEMENT_LOCK_KEY = KeyCode.Alpha0;
         private const KeyCode ALT_SLOW_MOTION_KEY = KeyCode.Minus;
+        private const KeyCode ALT_AUTO_MODE_KEY = KeyCode.Equals;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -59,7 +60,11 @@ namespace Systems
         private bool _kpiSnapshotRequested;
         private bool _movementLockToggleRequested;
         private bool _slowMotionToggleRequested;
+        private bool _autoModeToggleRequested;
         private bool _slowMotionEnabled;
+
+        [Header("Auto Test")]
+        [SerializeField] private bool _enableAutoModeOnStart = true;
 
         private float _serverFrameSumMs;
         private int _serverFrameSampleCount;
@@ -71,7 +76,8 @@ namespace Systems
         {
             _player = ResolveLocalPlayer();
             ResetKpiSession();
-            Debug.Log("[DebugUI] Active. Hotkeys: F8/F9/F10/F11 (alt: 9/0/-).");
+            Player.PlayerController.SetGlobalAutoModeEnabled(_enableAutoModeOnStart);
+            Debug.Log($"[DebugUI] Active. Hotkeys: F8/F9/F10/F11/F12 (alt: 9/0/-/=), AutoModeOnStart={_enableAutoModeOnStart}.");
         }
 
         private void OnDisable()
@@ -230,16 +236,20 @@ namespace Systems
             Label("");
             Label("<b>— QA KPI —</b>");
             Label($"세션 시간: {FormatDuration(GetSessionDurationSeconds())}");
-            Label("핫키: F8(리셋) / F9(스냅샷) / F10(동결) / F11(슬로우)");
-            Label("대체키: 9(스냅샷) / 0(동결) / -(슬로우)");
+            Label("핫키: F8(리셋) / F9(스냅샷) / F10(동결) / F11(슬로우) / F12(자동)");
+            Label("대체키: 9(스냅샷) / 0(동결) / -(슬로우) / =(자동)");
             Label($"로컬 이동 동결: <color={(_player != null && _player.IsDebugMovementLocked ? "orange" : "lime")}>{(_player != null && _player.IsDebugMovementLocked ? "ON" : "OFF")}</color>");
             Label($"슬로우모션: <color={(_slowMotionEnabled ? "orange" : "lime")}>{(_slowMotionEnabled ? "ON" : "OFF")}</color>");
+            Label($"자동 테스트 모드: <color={(Player.PlayerController.IsGlobalAutoModeEnabled ? "orange" : "lime")}>{(Player.PlayerController.IsGlobalAutoModeEnabled ? "ON" : "OFF")}</color>");
 
             if (GUILayout.Button(_player != null && _player.IsDebugMovementLocked ? "로컬 이동 동결 해제 (F10)" : "로컬 이동 동결 (F10)"))
                 ToggleLocalMovementLock();
 
             if (GUILayout.Button(_slowMotionEnabled ? "슬로우모션 해제 (F11)" : "슬로우모션 ON (F11, 0.35x)"))
                 ToggleSlowMotion();
+
+            if (GUILayout.Button(Player.PlayerController.IsGlobalAutoModeEnabled ? "자동 테스트 모드 OFF (F12)" : "자동 테스트 모드 ON (F12)"))
+                ToggleAutoMode();
 
             if (GUILayout.Button("KPI 스냅샷 로그 출력"))
                 EmitKpiSnapshotLog("manual-gui");
@@ -384,6 +394,13 @@ namespace Systems
             if (slowMotionRequested)
                 ToggleSlowMotion();
 
+            bool autoModeRequested =
+                WasHotkeyPressed(KeyCode.F12, ref _autoModeToggleRequested) ||
+                IsLegacyHotkeyPressed(ALT_AUTO_MODE_KEY) ||
+                IsInputSystemHotkeyPressed(ALT_AUTO_MODE_KEY);
+            if (autoModeRequested)
+                ToggleAutoMode();
+
             bool isClientConnected = NetworkClient.isConnected;
             if (isClientConnected && !_wasClientConnected)
             {
@@ -455,6 +472,20 @@ namespace Systems
             {
                 _slowMotionToggleRequested = true;
                 currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.keyCode == KeyCode.F12)
+            {
+                _autoModeToggleRequested = true;
+                currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.keyCode == ALT_AUTO_MODE_KEY)
+            {
+                _autoModeToggleRequested = true;
+                currentEvent.Use();
             }
         }
 
@@ -475,6 +506,8 @@ namespace Systems
                     return keyboard.f10Key.wasPressedThisFrame;
                 case KeyCode.F11:
                     return keyboard.f11Key.wasPressedThisFrame;
+                case KeyCode.F12:
+                    return keyboard.f12Key.wasPressedThisFrame;
                 case KeyCode.Alpha9:
                     return keyboard.digit9Key.wasPressedThisFrame;
                 case KeyCode.Alpha0:
@@ -507,6 +540,12 @@ namespace Systems
             _slowMotionEnabled = !_slowMotionEnabled;
             ApplySlowMotionTimeScale();
             Debug.Log($"[DebugUI] 슬로우모션 {(_slowMotionEnabled ? "ON(0.35x)" : "OFF(1.0x)")}");
+        }
+
+        private static void ToggleAutoMode()
+        {
+            bool next = !Player.PlayerController.IsGlobalAutoModeEnabled;
+            Player.PlayerController.SetGlobalAutoModeEnabled(next);
         }
 
         private void ApplySlowMotionTimeScale()
