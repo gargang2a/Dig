@@ -127,8 +127,11 @@ namespace Player
             nt.syncDirection = SyncDirection.ServerToClient;
             nt.useFixedUpdate = true;
             nt.onlySyncOnChange = false;
-            nt.positionPrecision = 0.005f;
-            nt.rotationSensitivity = 0.002f;
+            nt.onlySyncOnChangeCorrectionMultiplier = 3f;
+            nt.interpolatePosition = true;
+            nt.interpolateRotation = true;
+            nt.positionPrecision = 0.003f;
+            nt.rotationSensitivity = 0.003f;
             botObj.AddComponent<Network.NetworkBot>();
 
             // Physics
@@ -178,8 +181,11 @@ namespace Player
             nt.syncDirection = SyncDirection.ServerToClient;
             nt.useFixedUpdate = true;
             nt.onlySyncOnChange = false;
-            nt.positionPrecision = 0.005f;
-            nt.rotationSensitivity = 0.002f;
+            nt.onlySyncOnChangeCorrectionMultiplier = 3f;
+            nt.interpolatePosition = true;
+            nt.interpolateRotation = true;
+            nt.positionPrecision = 0.003f;
+            nt.rotationSensitivity = 0.003f;
             botObj.AddComponent<Network.NetworkBot>(); // SyncVar가 적용되면 비주얼 설정됨
 
             // Physics

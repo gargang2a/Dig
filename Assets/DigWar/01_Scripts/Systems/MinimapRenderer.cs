@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using Core;
 using Tunnel;
@@ -6,12 +6,12 @@ using Tunnel;
 namespace Systems
 {
     /// <summary>
-    /// 개선된 미니맵 렌더러.
-    /// - TunnelMaskManager의 RenderTexture를 배경으로 직접 표시 (터널 실시간 반영)
-    /// - 본인(초록), 타 플레이어(고유색), 봇(팔레트 색), 샌드웜(주황) 위치를 도트로 표시
-    /// - CPU 텍스처 페인팅 제거 → GPU RT 직접 참조로 성능 대폭 향상
+    /// 개선된 미니맵 렌더러
+    /// - TunnelMaskManager RenderTexture를 배경으로 직접 표시(터널 변경 실시간 반영)
+    /// - 본인(초록), 원격 플레이어(고유색), 봇(팀 색상), 샌드웜(주황) 위치를 도트로 표시
+    /// - CPU 텍스처 스캔 제거 후 GPU RenderTexture 직접 참조로 성능을 안정화
     ///
-    /// UI 계층: Minimap Bg → [TunnelMaskImage] → [EntityDots] → Ring
+    /// UI 계층: Minimap Bg -> [TunnelMaskImage] -> [EntityDots] -> Ring
     /// </summary>
     public class MinimapRenderer : MonoBehaviour
     {
@@ -27,13 +27,15 @@ namespace Systems
         private RectTransform _minimapRoot;
         private float _mapRadius;
         private float _usableRadius;
+        private const float MIN_MAP_RADIUS = 1f;
+        private const float MINIMAP_EDGE_MARGIN = 0.95f;
 
         // Entity dot UI elements
         private RectTransform _playerDotRT;
         private Image _playerDotImage;
         private RectTransform[] _botDotRTs;
         private Image[] _botDotImages;
-        private RectTransform[] _sandwormDotRTs; // 머리 + 모든 마디
+        private RectTransform[] _sandwormDotRTs; // 머리 + 모든 세그먼트
 
         private static readonly Color[] REMOTE_PLAYER_DOT_COLORS =
         {
@@ -54,16 +56,15 @@ namespace Systems
 
         private void Start()
         {
-            if (GameManager.Instance?.Settings == null) return;
-            _mapRadius = GameManager.Instance.Settings.MapRadius;
-
             SetupUI();
+            RefreshRuntimeCache();
         }
 
         private void LateUpdate()
         {
             if (_dotsContainer == null) return;
 
+            RefreshRuntimeCache();
             UpdatePlayerDot();
             UpdateBotDots();
             UpdateSandwormDots();
@@ -76,7 +77,7 @@ namespace Systems
             if (hud == null || hud.MinimapRoot == null) return;
 
             _minimapRoot = hud.MinimapRoot;
-            _usableRadius = hud.MinimapUsableRadius;
+            _usableRadius = Mathf.Max(1f, hud.MinimapUsableRadius);
 
             // 1) 터널 마스크 RenderTexture를 미니맵 배경으로 표시
             SetupTunnelMaskDisplay();
@@ -94,11 +95,27 @@ namespace Systems
             _playerDotRT = CreateDot("PlayerDot", _playerDotColor, _playerDotSize, out _playerDotImage);
 
 
-            // 4) 봇 도트 (런타임 수량 변경 대응)
+            // 4) 봇 도트 (동적 수량 변경 대응)
             _botDotRTs = new RectTransform[0];
             _botDotImages = new Image[0];
 
-            // 5) 샌드웜 도트 → UpdateSandwormDots에서 자동 생성
+            // 5) 샌드웜 도트는 UpdateSandwormDots에서 자동 생성
+        }
+
+        private void RefreshRuntimeCache()
+        {
+            if (GameManager.Instance?.Settings != null)
+                _mapRadius = Mathf.Max(MIN_MAP_RADIUS, GameManager.Instance.Settings.MapRadius);
+            else
+                _mapRadius = Mathf.Max(MIN_MAP_RADIUS, _mapRadius);
+
+            if (_minimapRoot != null)
+            {
+                // 웹 해상도/Canvas 스케일 변화 대응
+                float dynamicRadius = Mathf.Min(_minimapRoot.rect.width, _minimapRoot.rect.height) * 0.5f * MINIMAP_EDGE_MARGIN;
+                if (dynamicRadius > 1f)
+                    _usableRadius = dynamicRadius;
+            }
         }
 
         private void SetupTunnelMaskDisplay()
@@ -188,7 +205,7 @@ namespace Systems
 
             int index = 0;
 
-            // 1) 리모트 플레이어 (각 플레이어별 고유색)
+            // 1) 원격 플레이어 (플레이어별 고유색)
             foreach (Network.NetworkPlayer player in Network.NetworkPlayer.ActivePlayers)
             {
                 if (player == null || player.isLocalPlayer) continue;
@@ -205,7 +222,7 @@ namespace Systems
                 index++;
             }
 
-            // 2) 네트워크 봇 (봇 팔레트 색상)
+            // 2) 네트워크 봇 (봇 프리셋 색상)
             foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
             {
                 if (bot == null) continue;
@@ -234,7 +251,7 @@ namespace Systems
                 return;
             }
 
-            // 필요한 총 도트 수 계산 (각 벌레의 머리 + 마디)
+            // 필요한 전체 도트 수 계산 (각 웜의 머리 + 세그먼트)
             int needed = 0;
             foreach (World.Sandworm worm in World.Sandworm.ActiveWorms)
             {
@@ -248,7 +265,7 @@ namespace Systems
                 return;
             }
 
-            // 도트 수가 맞지 않으면 (재)생성
+            // 도트 수가 맞지 않으면 재생성
             if (_sandwormDotRTs == null || _sandwormDotRTs.Length != needed)
             {
                 if (_sandwormDotRTs != null)
@@ -286,7 +303,7 @@ namespace Systems
                 if (dotIdx < _sandwormDotRTs.Length)
                     _sandwormDotRTs[dotIdx++].anchoredPosition = WorldToMinimap(worm.transform.position);
 
-                // 마디들
+                // 세그먼트
                 for (int i = 0; i < worm.Segments.Count; i++)
                 {
                     if (dotIdx >= _sandwormDotRTs.Length) break;
@@ -381,9 +398,13 @@ namespace Systems
         // ===== 좌표 변환 =====
         private Vector2 WorldToMinimap(Vector3 worldPos)
         {
-            float x = worldPos.x / _mapRadius * _usableRadius;
-            float y = worldPos.y / _mapRadius * _usableRadius;
-            return new Vector2(x, y);
+            float radius = Mathf.Max(MIN_MAP_RADIUS, _mapRadius);
+            Vector2 normalized = new Vector2(worldPos.x / radius, worldPos.y / radius);
+
+            if (normalized.sqrMagnitude > 1f)
+                normalized = normalized.normalized;
+
+            return normalized * _usableRadius;
         }
 
         private void OnDestroy()
@@ -391,3 +412,5 @@ namespace Systems
         }
     }
 }
+
+

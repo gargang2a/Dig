@@ -7158,7 +7158,7 @@ MonoBehaviour:
   spawnPrefabs: []
   exceptionsDisconnect: 1
   snapshotSettings:
-    bufferTimeMultiplier: 2
+    bufferTimeMultiplier: 4
     bufferLimit: 32
     catchupNegativeThreshold: -1
     catchupPositiveThreshold: 1
@@ -7166,7 +7166,7 @@ MonoBehaviour:
     slowdownSpeed: 0.03999999910593033
     driftEmaDuration: 1
     dynamicAdjustment: 1
-    dynamicAdjustmentTolerance: 1
+    dynamicAdjustmentTolerance: 2
     deliveryTimeEmaDuration: 2
   evaluationMethod: 0
   evaluationInterval: 3
@@ -7253,6 +7253,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _botCount: 8
+  _autoRespawnBots: 1
+  _respawnCheckInterval: 0.5
   _botSprite: {fileID: 21300000, guid: 619d45642e3f9c447b432b5a5bd2c2ed, type: 3}
 --- !u!1 &1734165274
 GameObject:

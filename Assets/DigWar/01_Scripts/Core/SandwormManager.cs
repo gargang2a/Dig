@@ -100,6 +100,13 @@ namespace Core
                 {
                     var nt = worm.AddComponent<NetworkTransformReliable>();
                     nt.syncDirection = SyncDirection.ServerToClient;
+                    nt.useFixedUpdate = true;
+                    nt.onlySyncOnChange = false;
+                    nt.onlySyncOnChangeCorrectionMultiplier = 3f;
+                    nt.interpolatePosition = true;
+                    nt.interpolateRotation = true;
+                    nt.positionPrecision = 0.003f;
+                    nt.rotationSensitivity = 0.003f;
                 }
 
                 NetworkServer.Spawn(worm, SANDWORM_ASSET_ID);
@@ -135,6 +142,13 @@ namespace Core
             {
                 var nt = worm.AddComponent<NetworkTransformReliable>();
                 nt.syncDirection = SyncDirection.ServerToClient;
+                nt.useFixedUpdate = true;
+                nt.onlySyncOnChange = false;
+                nt.onlySyncOnChangeCorrectionMultiplier = 3f;
+                nt.interpolatePosition = true;
+                nt.interpolateRotation = true;
+                nt.positionPrecision = 0.003f;
+                nt.rotationSensitivity = 0.003f;
             }
 
             return worm;

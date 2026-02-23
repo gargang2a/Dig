@@ -259,7 +259,7 @@ MonoBehaviour:
   syncPosition: 1
   syncRotation: 1
   syncScale: 0
-  onlySyncOnChange: 1
+  onlySyncOnChange: 0
   compressRotation: 1
   interpolatePosition: 1
   interpolateRotation: 1
@@ -269,10 +269,10 @@ MonoBehaviour:
   showGizmos: 0
   showOverlay: 0
   overlayColor: {r: 0, g: 0, b: 0, a: 0.5}
-  onlySyncOnChangeCorrectionMultiplier: 2
+  onlySyncOnChangeCorrectionMultiplier: 3
   useFixedUpdate: 0
-  rotationSensitivity: 0.01
-  positionPrecision: 0.01
+  rotationSensitivity: 0.003
+  positionPrecision: 0.003
   scalePrecision: 0.01
 --- !u!114 &8202224964610197389
 MonoBehaviour:
@@ -376,3 +376,4 @@ SpriteRenderer:
   m_WasSpriteAssigned: 1
   m_MaskInteraction: 0
   m_SpriteSortPoint: 0
+

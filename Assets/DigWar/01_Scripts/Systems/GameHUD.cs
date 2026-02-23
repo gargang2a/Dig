@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
@@ -7,20 +7,20 @@ using Core;
 namespace Systems
 {
     /// <summary>
-    /// 게임 HUD: 좌측 상단 리더보드, 우측 상단 점수, 우측 하단 미니맵.
-    /// Canvas에 미리 배치된 TMP/Image를 SerializeField로 참조한다.
+    /// 寃뚯엫 HUD: 醫뚯륫 ?곷떒 由щ뜑蹂대뱶, ?곗륫 ?곷떒 ?먯닔, ?곗륫 ?섎떒 誘몃땲留?
+    /// Canvas??誘몃━ 諛곗튂??TMP/Image瑜?SerializeField濡?李몄“?쒕떎.
     /// </summary>
     public class GameHUD : MonoBehaviour
     {
-        [Header("점수 (우측 상단)")]
+        [Header("?먯닔 (?곗륫 ?곷떒)")]
         [SerializeField] private TMP_Text _scoreText;
 
-        [Header("리더보드 (좌측 상단)")]
-        [SerializeField] private TMP_Text[] _rankNames = new TMP_Text[8];  // "1. 이름"
-        [SerializeField] private TMP_Text[] _rankScores = new TMP_Text[8]; // "20950" (우측정렬)
-        [SerializeField] private Image[] _rankDots = new Image[8];         // 색상 점/아이콘
+        [Header("由щ뜑蹂대뱶 (醫뚯륫 ?곷떒)")]
+        [SerializeField] private TMP_Text[] _rankNames = new TMP_Text[8];  // "1. ?대쫫"
+        [SerializeField] private TMP_Text[] _rankScores = new TMP_Text[8]; // "20950" (?곗륫?뺣젹)
+        [SerializeField] private Image[] _rankDots = new Image[8];         // ?됱긽 ???꾩씠肄?
 
-        [Header("미니맵 (우측 하단)")]
+        [Header("誘몃땲留?(?곗륫 ?섎떒)")]
         [SerializeField] private RectTransform _minimapRoot;
         public RectTransform MinimapRoot => _minimapRoot;
         [SerializeField] private Image _playerDot;
@@ -28,10 +28,10 @@ namespace Systems
         [SerializeField] private float _minimapUsableRadius = 65f;
         public float MinimapUsableRadius => _minimapUsableRadius;
 
-        // 색상
-        private static readonly Color COLOR_FIRST = new Color(1f, 0.65f, 0.2f);   // 주황 (1위)
-        private static readonly Color COLOR_PLAYER = Color.white;                   // 본인
-        private static readonly Color COLOR_NORMAL = new Color(0.75f, 0.75f, 0.75f); // 일반
+        // ?됱긽
+        private static readonly Color COLOR_FIRST = new Color(1f, 0.65f, 0.2f);   // 二쇳솴 (1??
+        private static readonly Color COLOR_PLAYER = Color.white;                   // 蹂몄씤
+        private static readonly Color COLOR_NORMAL = new Color(0.75f, 0.75f, 0.75f); // ?쇰컲
         private static readonly Color[] REMOTE_PLAYER_DOT_COLORS =
         {
             new Color(1f, 0.55f, 0.25f),   // orange
@@ -44,7 +44,7 @@ namespace Systems
             new Color(0.55f, 1f, 0.75f),   // mint
         };
 
-        // 내부 데이터
+        // ?대? ?곗씠??
         private readonly List<LeaderboardEntry> _entries = new List<LeaderboardEntry>(16);
         private float _updateTimer;
         private const float UPDATE_INTERVAL = 0.5f;
@@ -52,6 +52,7 @@ namespace Systems
         private float _nextLocalPlayerLookupAt;
 
         private static readonly string[] BOT_NAMES = Network.NetworkBot.BOT_NAMES;
+        private MinimapRenderer _minimapRenderer;
 
         private struct LeaderboardEntry
         {
@@ -63,31 +64,45 @@ namespace Systems
 
         private void Update()
         {
-            // 점수 매 프레임
+            // ?먯닔 留??꾨젅??
             if (_scoreText != null && GameManager.Instance != null)
                 _scoreText.text = $"{GameManager.Instance.CurrentScore:N0}";
 
-            // 리더보드 + 미니맵 주기적
+            // 由щ뜑蹂대뱶 + 誘몃땲留?二쇨린??
             _updateTimer -= Time.deltaTime;
             if (_updateTimer <= 0f)
             {
                 _updateTimer = UPDATE_INTERVAL;
                 UpdateLeaderboard();
                 RefreshLeaderboardUI();
-                RefreshMinimap();
+                if (_minimapRenderer == null || !_minimapRenderer.enabled)
+                    RefreshMinimap();
             }
         }
 
         private void Start()
         {
             // 미니맵 렌더러 자동 부착
-            if (GetComponent<MinimapRenderer>() == null)
-                gameObject.AddComponent<MinimapRenderer>();
+            _minimapRenderer = GetComponent<MinimapRenderer>();
+            if (_minimapRenderer == null)
+                _minimapRenderer = gameObject.AddComponent<MinimapRenderer>();
 
-            // MainMenuUI는 전용 UI 오브젝트에서 참조가 연결된 상태로 동작해야 한다.
-            // HUD 오브젝트에 런타임으로 부착하면 참조 누락 경고와 중복 이벤트 구독이 발생할 수 있다.
+            // MainMenuUI???꾩슜 UI ?ㅻ툕?앺듃?먯꽌 李몄“媛 ?곌껐???곹깭濡??숈옉?댁빞 ?쒕떎.
+            // HUD ?ㅻ툕?앺듃???고??꾩쑝濡?遺李⑺븯硫?李몄“ ?꾨씫 寃쎄퀬? 以묐났 ?대깽??援щ룆??諛쒖깮?????덈떎.
             if (FindObjectOfType<MainMenuUI>() == null)
                 Debug.LogWarning("[GameHUD] MainMenuUI is missing in this scene. Start menu flow will be unavailable.");
+
+            if (_minimapRenderer != null && _minimapRenderer.enabled)
+            {
+                if (_playerDot != null)
+                    _playerDot.gameObject.SetActive(false);
+
+                for (int i = 0; i < _botDots.Length; i++)
+                {
+                    if (_botDots[i] != null)
+                        _botDots[i].gameObject.SetActive(false);
+                }
+            }
         }
 
 
@@ -96,7 +111,7 @@ namespace Systems
         {
             _entries.Clear();
 
-            // 1) 네트워크 플레이어들 (로컬 플레이어 포함)
+            // 1) ?ㅽ듃?뚰겕 ?뚮젅?댁뼱??(濡쒖뺄 ?뚮젅?댁뼱 ?ы븿)
             bool hasNetworkPlayers = Network.NetworkPlayer.ActivePlayers.Count > 0;
             if (hasNetworkPlayers)
             {
@@ -104,8 +119,8 @@ namespace Systems
                 {
                     if (np == null) continue;
                     bool isLocal = np.isLocalPlayer;
-                    // 로컬 플레이어: GameManager의 실시간 점수 사용
-                    // 리모트 플레이어: SyncVar Score 사용
+                    // 濡쒖뺄 ?뚮젅?댁뼱: GameManager???ㅼ떆媛??먯닔 ?ъ슜
+                    // 由щえ???뚮젅?댁뼱: SyncVar Score ?ъ슜
                     float score = isLocal && GameManager.Instance != null
                         ? GameManager.Instance.CurrentScore
                         : np.Score;
@@ -125,7 +140,7 @@ namespace Systems
             }
             else
             {
-                // Mirror 미사용 (싱글플레이 호환)
+                // Mirror 誘몄궗??(?깃??뚮젅???명솚)
                 float playerScore = GameManager.Instance != null
                     ? GameManager.Instance.CurrentScore : 0f;
                 _entries.Add(new LeaderboardEntry
@@ -136,8 +151,7 @@ namespace Systems
                 });
             }
 
-            // 2) AI 봇
-            // 2) AI 봇 — NetworkBot.Score(SyncVar)로 동기화된 점수 사용
+            // 2) AI 遊?            // 2) AI 遊???NetworkBot.Score(SyncVar)濡??숆린?붾맂 ?먯닔 ?ъ슜
             foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
             {
                 if (bot == null) continue;
@@ -163,7 +177,7 @@ namespace Systems
             {
                 bool active = i < count;
 
-                // 이름 표시
+                // ?대쫫 ?쒖떆
                 if (_rankNames[i] != null)
                 {
                     _rankNames[i].gameObject.SetActive(active);
@@ -172,7 +186,7 @@ namespace Systems
                         var e = _entries[i];
                         _rankNames[i].text = $"{i + 1}. {e.Name}";
 
-                        // 색상: 1위=주황, 본인=흰, 나머지=회색
+                        // ?됱긽: 1??二쇳솴, 蹂몄씤=?? ?섎㉧吏=?뚯깋
                         Color textColor = i == 0 ? COLOR_FIRST
                             : e.IsPlayer ? COLOR_PLAYER
                             : COLOR_NORMAL;
@@ -182,7 +196,7 @@ namespace Systems
                     }
                 }
 
-                // 점수 표시 (우측 정렬)
+                // ?먯닔 ?쒖떆 (?곗륫 ?뺣젹)
                 if (i < _rankScores.Length && _rankScores[i] != null)
                 {
                     _rankScores[i].gameObject.SetActive(active);
@@ -198,7 +212,7 @@ namespace Systems
                     }
                 }
 
-                // 색상 점
+                // ?됱긽 ??
                 if (i < _rankDots.Length && _rankDots[i] != null)
                 {
                     _rankDots[i].gameObject.SetActive(active);
@@ -214,7 +228,7 @@ namespace Systems
             if (GameManager.Instance == null || _minimapRoot == null) return;
             float mapRadius = GameManager.Instance.Settings.MapRadius;
 
-            // 로컬 플레이어 찾기
+            // 濡쒖뺄 ?뚮젅?댁뼱 李얘린
             bool foundLocal = false;
             if (Network.NetworkPlayer.ActivePlayers.Count > 0)
             {
@@ -233,10 +247,10 @@ namespace Systems
                 }
             }
 
-            // 네트워크 플레이어를 아직 못 찾으면 PlayerController 폴백 (싱글플레이 전용)
+            // ?ㅽ듃?뚰겕 ?뚮젅?댁뼱瑜??꾩쭅 紐?李얠쑝硫?PlayerController ?대갚 (?깃??뚮젅???꾩슜)
             if (!foundLocal && _playerDot != null)
             {
-                // 멀티플레이어 환경에서는 NetworkPlayer 스폰 전까지 대기
+                // 멀티플레이 환경에서는 NetworkPlayer 스폰 시점까지 대기
                 if (Mirror.NetworkManager.singleton == null)
                 {
                     Player.PlayerController localPc = ResolveLocalPlayerController();
@@ -259,10 +273,10 @@ namespace Systems
                 }
             }
 
-            // botDots를 리모트 플레이어 + 봇에 배분
+            // botDots瑜?由щえ???뚮젅?댁뼱 + 遊뉗뿉 諛곕텇
             int dotIndex = 0;
 
-            // 리모트 플레이어 (플레이어별 고유 색상)
+            // 由щえ???뚮젅?댁뼱 (?뚮젅?댁뼱蹂?怨좎쑀 ?됱긽)
             foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
             {
                 if (np == null) continue;
@@ -279,7 +293,7 @@ namespace Systems
                 }
             }
 
-            // 봇 (각자 색상)
+            // 遊?(媛곸옄 ?됱긽)
             foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
             {
                 if (bot == null) continue;
@@ -295,7 +309,7 @@ namespace Systems
                 dotIndex++;
             }
 
-            // 나머지 비활성
+            // ?섎㉧吏 鍮꾪솢??
             for (int i = dotIndex; i < _botDots.Length; i++)
             {
                 if (_botDots[i] != null)
@@ -330,10 +344,20 @@ namespace Systems
 
         private void SetDotPos(Image dot, Vector3 worldPos, float mapRadius)
         {
-            float nx = worldPos.x / mapRadius;
-            float ny = worldPos.y / mapRadius;
-            dot.rectTransform.anchoredPosition =
-                new Vector2(nx * _minimapUsableRadius, ny * _minimapUsableRadius);
+            float safeMapRadius = Mathf.Max(1f, mapRadius);
+            Vector2 normalized = new Vector2(worldPos.x / safeMapRadius, worldPos.y / safeMapRadius);
+            if (normalized.sqrMagnitude > 1f)
+                normalized = normalized.normalized;
+
+            float dynamicRadius = _minimapUsableRadius;
+            if (_minimapRoot != null)
+            {
+                float rootRadius = Mathf.Min(_minimapRoot.rect.width, _minimapRoot.rect.height) * 0.5f * 0.95f;
+                if (rootRadius > 1f)
+                    dynamicRadius = rootRadius;
+            }
+
+            dot.rectTransform.anchoredPosition = normalized * dynamicRadius;
         }
 
         private static Color GetRemotePlayerDotColor(Network.NetworkPlayer player)
@@ -351,3 +375,5 @@ namespace Systems
         }
     }
 }
+
+

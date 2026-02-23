@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using Core;
@@ -9,18 +9,18 @@ namespace Systems
 {
     /// <summary>
     /// 메인 메뉴 UI. 게임 시작 전 닉네임 입력 + Play 버튼.
-    /// 미리 배치된 UI 참조를 사용하며, 참조 누락 시 시작 메뉴 기능이 제한된다.
+    /// 네트워크 미연결 상태에서 Play를 눌러도 패널을 닫지 않고 연결 상태를 안내한다.
     /// </summary>
     public class MainMenuUI : MonoBehaviour
     {
-        [Header("UI 참조 (누락 시 시작 메뉴 기능 제한)")]
+        [Header("UI 참조 (패널 필수)")]
         [SerializeField] private GameObject _panel;
         [SerializeField] private TMP_InputField _nameInput;
         [SerializeField] private Button _playButton;
         [SerializeField] private TMP_Text _statusText;
 
         private bool _retryConnectPending;
-
+        private bool _startRequestedWhileConnecting;
 
         private void OnEnable()
         {
@@ -32,22 +32,20 @@ namespace Systems
             DigWarNetworkManager.OnClientConnectionStatusChanged -= OnClientConnectionStatusChanged;
         }
 
-
         private void Start()
         {
-            // UI가 연결되지 않았으면 경고 로그 출력
             if (_panel == null)
             {
                 Debug.LogWarning("[MainMenuUI] UI References are missing! Please assign them in the Inspector.");
                 return;
             }
 
-            // 기본값 설정
+            EnsureStatusText();
+
             if (_nameInput != null)
             {
                 _nameInput.characterLimit = 12;
 
-                // 이전 이름이 있다면 입력창에 채워넣기
                 if (GameManager.Instance != null && !string.IsNullOrEmpty(GameManager.Instance.PlayerName))
                     _nameInput.text = GameManager.Instance.PlayerName;
             }
@@ -58,48 +56,44 @@ namespace Systems
             if (_playButton != null)
                 _playButton.interactable = true;
 
-            // 게임 시작 전이므로 메뉴 표시
-            if (_panel != null)
-                _panel.SetActive(true);
-
+            _panel.SetActive(true);
             ApplyStatusText(string.Empty);
 
-            DigWarNetworkManager.ClientConnectionStatus latestStatus =
-                DigWarNetworkManager.LatestClientConnectionStatus;
+            DigWarNetworkManager.ClientConnectionStatus latestStatus = DigWarNetworkManager.LatestClientConnectionStatus;
             _retryConnectPending = latestStatus.IsError;
             if (!string.IsNullOrWhiteSpace(latestStatus.Message))
                 OnClientConnectionStatusChanged(latestStatus);
 
-            // 게임 오브젝트 일시 멈춤 (플레이어/봇 이동 차단)
             Time.timeScale = 0f;
         }
 
         private void Update()
         {
-            // Enter로도 시작 가능
-            if (_panel != null && _panel.activeSelf
-                && Input.GetKeyDown(KeyCode.Return))
-            {
+            if (_panel != null && _panel.activeSelf && Input.GetKeyDown(KeyCode.Return))
                 OnPlayClicked();
-            }
         }
 
         private void OnPlayClicked()
         {
-            if (_retryConnectPending && TryReconnectClientIfNeeded()) return;
+            if (_retryConnectPending && TryReconnectClientIfNeeded())
+            {
+                _startRequestedWhileConnecting = true;
+                return;
+            }
 
+            if (!EnsureNetworkReadyForPlay())
+                return;
+
+            _startRequestedWhileConnecting = false;
             ApplyStatusText(string.Empty);
 
             if (_playButton != null)
                 _playButton.interactable = false;
 
-            string playerName = _nameInput != null
-                ? _nameInput.text.Trim() : "Player";
-
+            string playerName = _nameInput != null ? _nameInput.text.Trim() : "Player";
             if (string.IsNullOrEmpty(playerName))
                 playerName = "Player";
 
-            // GameManager에 이름 전달 및 게임 시작
             if (GameManager.Instance != null)
             {
                 GameManager.Instance.PlayerName = playerName;
@@ -107,7 +101,6 @@ namespace Systems
                     GameManager.Instance.StartGame();
             }
 
-            // 시간 복원 & 메뉴 숨기기
             Time.timeScale = 1f;
             if (_panel != null)
                 _panel.SetActive(false);
@@ -122,6 +115,10 @@ namespace Systems
             {
                 if (_playButton != null)
                     _playButton.interactable = true;
+
+                if (_startRequestedWhileConnecting)
+                    OnPlayClicked();
+
                 return;
             }
 
@@ -136,7 +133,15 @@ namespace Systems
 
         private void ApplyStatusText(string message)
         {
-            if (_statusText == null) return;
+            if (_statusText == null)
+                EnsureStatusText();
+
+            if (_statusText == null)
+            {
+                if (!string.IsNullOrWhiteSpace(message))
+                    Debug.LogWarning($"[MainMenuUI] {message}");
+                return;
+            }
 
             bool hasMessage = !string.IsNullOrWhiteSpace(message);
             _statusText.gameObject.SetActive(hasMessage);
@@ -148,7 +153,6 @@ namespace Systems
             DigWarNetworkManager networkManager = DigWarNetworkManager.Instance;
             if (networkManager == null) return false;
 
-            // Host/Server 인스턴스는 재접속 대신 기존 시작 흐름 사용.
             if (NetworkServer.active) return false;
             if (NetworkClient.isConnected) return false;
 
@@ -156,13 +160,70 @@ namespace Systems
                 networkManager.StopClient();
 
             networkManager.StartClient();
-            ApplyStatusText("서버 재접속 시도 중...");
+            ApplyStatusText("Retrying connection to server...");
             _retryConnectPending = false;
 
             if (_playButton != null)
                 _playButton.interactable = false;
 
             return true;
+        }
+
+        private bool EnsureNetworkReadyForPlay()
+        {
+            DigWarNetworkManager networkManager = DigWarNetworkManager.Instance;
+            if (networkManager == null) return true;
+            if (NetworkServer.active) return true;
+            if (NetworkClient.isConnected) return true;
+
+            _startRequestedWhileConnecting = true;
+
+            if (!NetworkClient.active)
+            {
+                networkManager.StartClient();
+                ApplyStatusText("Connecting to server...");
+            }
+            else
+            {
+                ApplyStatusText("Waiting for server connection...");
+            }
+
+            if (_panel != null)
+                _panel.SetActive(true);
+
+            if (_playButton != null)
+                _playButton.interactable = false;
+
+            Time.timeScale = 0f;
+            return false;
+        }
+
+        private void EnsureStatusText()
+        {
+            if (_statusText != null || _panel == null)
+                return;
+
+            GameObject statusObject = new GameObject("StatusText_Auto", typeof(RectTransform));
+            statusObject.transform.SetParent(_panel.transform, false);
+
+            RectTransform statusRect = statusObject.GetComponent<RectTransform>();
+            statusRect.anchorMin = new Vector2(0.5f, 0f);
+            statusRect.anchorMax = new Vector2(0.5f, 0f);
+            statusRect.pivot = new Vector2(0.5f, 0f);
+            statusRect.anchoredPosition = new Vector2(0f, 24f);
+            statusRect.sizeDelta = new Vector2(680f, 80f);
+
+            TextMeshProUGUI autoStatusText = statusObject.AddComponent<TextMeshProUGUI>();
+            autoStatusText.text = string.Empty;
+            autoStatusText.alignment = TextAlignmentOptions.Center;
+            autoStatusText.enableWordWrapping = true;
+            autoStatusText.fontSize = 24f;
+            autoStatusText.color = new Color(1f, 0.86f, 0.24f, 1f);
+
+            statusObject.SetActive(false);
+            _statusText = autoStatusText;
+
+            Debug.LogWarning("[MainMenuUI] _statusText is missing. Runtime fallback StatusText_Auto created.");
         }
     }
 }

@@ -48,6 +48,7 @@ namespace Player
         {
             _rb = GetComponent<Rigidbody2D>();
             _rb.bodyType = RigidbodyType2D.Kinematic;
+            _rb.interpolation = RigidbodyInterpolation2D.Interpolate;
             _growth = GetComponent<Core.MoleGrowth>();
             if (_growth == null) _growth = gameObject.AddComponent<Core.MoleGrowth>();
             _tunnelGen = GetComponent<Tunnel.TunnelGenerator>();
