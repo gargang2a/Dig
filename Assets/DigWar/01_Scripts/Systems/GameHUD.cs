@@ -32,15 +32,26 @@ namespace Systems
         private static readonly Color COLOR_FIRST = new Color(1f, 0.65f, 0.2f);   // 주황 (1위)
         private static readonly Color COLOR_PLAYER = Color.white;                   // 본인
         private static readonly Color COLOR_NORMAL = new Color(0.75f, 0.75f, 0.75f); // 일반
+        private static readonly Color[] REMOTE_PLAYER_DOT_COLORS =
+        {
+            new Color(1f, 0.55f, 0.25f),   // orange
+            new Color(1f, 0.82f, 0.25f),   // amber
+            new Color(0.35f, 0.78f, 1f),   // sky blue
+            new Color(0.9f, 0.48f, 1f),    // magenta
+            new Color(1f, 0.55f, 0.75f),   // pink
+            new Color(0.55f, 0.65f, 1f),   // indigo
+            new Color(1f, 0.4f, 0.4f),     // red
+            new Color(0.55f, 1f, 0.75f),   // mint
+        };
 
         // 내부 데이터
         private readonly List<LeaderboardEntry> _entries = new List<LeaderboardEntry>(16);
         private float _updateTimer;
         private const float UPDATE_INTERVAL = 0.5f;
+        private Player.PlayerController _cachedLocalPlayer;
+        private float _nextLocalPlayerLookupAt;
 
-        private static readonly string[] BOT_NAMES =
-            { "Drillma", "MoleTrap", "DigiDig", "GrubWorm",
-              "TunnelKing", "DirtDash", "BurrBot", "SubStar" };
+        private static readonly string[] BOT_NAMES = Network.NetworkBot.BOT_NAMES;
 
         private struct LeaderboardEntry
         {
@@ -73,9 +84,10 @@ namespace Systems
             if (GetComponent<MinimapRenderer>() == null)
                 gameObject.AddComponent<MinimapRenderer>();
 
-            // 메인 메뉴 자동 부착
+            // MainMenuUI는 전용 UI 오브젝트에서 참조가 연결된 상태로 동작해야 한다.
+            // HUD 오브젝트에 런타임으로 부착하면 참조 누락 경고와 중복 이벤트 구독이 발생할 수 있다.
             if (FindObjectOfType<MainMenuUI>() == null)
-                gameObject.AddComponent<MainMenuUI>();
+                Debug.LogWarning("[GameHUD] MainMenuUI is missing in this scene. Start menu flow will be unavailable.");
         }
 
 
@@ -84,22 +96,57 @@ namespace Systems
         {
             _entries.Clear();
 
-            float playerScore = GameManager.Instance != null
-                ? GameManager.Instance.CurrentScore : 0f;
-            _entries.Add(new LeaderboardEntry
+            // 1) 네트워크 플레이어들 (로컬 플레이어 포함)
+            bool hasNetworkPlayers = Network.NetworkPlayer.ActivePlayers.Count > 0;
+            if (hasNetworkPlayers)
             {
-                Name = GameManager.Instance.PlayerName, Score = playerScore,
-                DotColor = Color.white, IsPlayer = true
-            });
+                foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
+                {
+                    if (np == null) continue;
+                    bool isLocal = np.isLocalPlayer;
+                    // 로컬 플레이어: GameManager의 실시간 점수 사용
+                    // 리모트 플레이어: SyncVar Score 사용
+                    float score = isLocal && GameManager.Instance != null
+                        ? GameManager.Instance.CurrentScore
+                        : np.Score;
 
-            var bots = FindObjectsOfType<Player.AIController>();
-            for (int i = 0; i < bots.Length; i++)
+                    string name = string.IsNullOrEmpty(np.PlayerName)
+                        ? (isLocal ? GameManager.Instance?.PlayerName ?? "Player" : "Player")
+                        : np.PlayerName;
+
+                    _entries.Add(new LeaderboardEntry
+                    {
+                        Name = name,
+                        Score = score,
+                        DotColor = isLocal ? Color.white : GetRemotePlayerDotColor(np),
+                        IsPlayer = isLocal
+                    });
+                }
+            }
+            else
             {
-                var sr = bots[i].GetComponentInChildren<SpriteRenderer>();
+                // Mirror 미사용 (싱글플레이 호환)
+                float playerScore = GameManager.Instance != null
+                    ? GameManager.Instance.CurrentScore : 0f;
                 _entries.Add(new LeaderboardEntry
                 {
-                    Name = BOT_NAMES[i % BOT_NAMES.Length],
-                    Score = bots[i].Score,
+                    Name = GameManager.Instance?.PlayerName ?? "Player",
+                    Score = playerScore,
+                    DotColor = Color.white, IsPlayer = true
+                });
+            }
+
+            // 2) AI 봇
+            // 2) AI 봇 — NetworkBot.Score(SyncVar)로 동기화된 점수 사용
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            {
+                if (bot == null) continue;
+
+                var sr = bot.GetComponentInChildren<SpriteRenderer>();
+                _entries.Add(new LeaderboardEntry
+                {
+                    Name = BOT_NAMES[bot.BotIndex % BOT_NAMES.Length],
+                    Score = bot.Score,
                     DotColor = sr != null ? sr.color : Color.gray,
                     IsPlayer = false
                 });
@@ -167,27 +214,118 @@ namespace Systems
             if (GameManager.Instance == null || _minimapRoot == null) return;
             float mapRadius = GameManager.Instance.Settings.MapRadius;
 
-            var player = FindObjectOfType<Player.PlayerController>();
-            if (player != null && _playerDot != null)
-                SetDotPos(_playerDot, player.transform.position, mapRadius);
-
-            var bots = FindObjectsOfType<Player.AIController>();
-            for (int i = 0; i < _botDots.Length; i++)
+            // 로컬 플레이어 찾기
+            bool foundLocal = false;
+            if (Network.NetworkPlayer.ActivePlayers.Count > 0)
             {
-                if (_botDots[i] == null) continue;
-
-                if (i < bots.Length)
+                foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
                 {
-                    _botDots[i].gameObject.SetActive(true);
-                    var sr = bots[i].GetComponentInChildren<SpriteRenderer>();
-                    _botDots[i].color = sr != null ? sr.color : Color.red;
-                    SetDotPos(_botDots[i], bots[i].transform.position, mapRadius);
+                    if (np == null) continue;
+                    if (np.isLocalPlayer && _playerDot != null)
+                    {
+                        _playerDot.gameObject.SetActive(true);
+                        _playerDot.color = Color.green;
+                        _playerDot.rectTransform.sizeDelta = new Vector2(12f, 12f);
+                        SetDotPos(_playerDot, np.transform.position, mapRadius);
+                        foundLocal = true;
+                        break;
+                    }
+                }
+            }
+
+            // 네트워크 플레이어를 아직 못 찾으면 PlayerController 폴백 (싱글플레이 전용)
+            if (!foundLocal && _playerDot != null)
+            {
+                // 멀티플레이어 환경에서는 NetworkPlayer 스폰 전까지 대기
+                if (Mirror.NetworkManager.singleton == null)
+                {
+                    Player.PlayerController localPc = ResolveLocalPlayerController();
+                    if (localPc != null)
+                    {
+                        _playerDot.gameObject.SetActive(true);
+                        _playerDot.color = Color.green;
+                        _playerDot.rectTransform.sizeDelta = new Vector2(12f, 12f);
+                        SetDotPos(_playerDot, localPc.transform.position, mapRadius);
+                        foundLocal = true;
+                    }
+                    else
+                    {
+                        _playerDot.gameObject.SetActive(false);
+                    }
                 }
                 else
                 {
-                    _botDots[i].gameObject.SetActive(false);
+                    _playerDot.gameObject.SetActive(false);
                 }
             }
+
+            // botDots를 리모트 플레이어 + 봇에 배분
+            int dotIndex = 0;
+
+            // 리모트 플레이어 (플레이어별 고유 색상)
+            foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
+            {
+                if (np == null) continue;
+                if (!np.isLocalPlayer && dotIndex < _botDots.Length)
+                {
+                    if (_botDots[dotIndex] != null)
+                    {
+                        _botDots[dotIndex].gameObject.SetActive(true);
+                        _botDots[dotIndex].color = GetRemotePlayerDotColor(np);
+                        _botDots[dotIndex].rectTransform.sizeDelta = new Vector2(10f, 10f);
+                        SetDotPos(_botDots[dotIndex], np.transform.position, mapRadius);
+                    }
+                    dotIndex++;
+                }
+            }
+
+            // 봇 (각자 색상)
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            {
+                if (bot == null) continue;
+                if (dotIndex >= _botDots.Length) break;
+
+                if (_botDots[dotIndex] != null)
+                {
+                    _botDots[dotIndex].gameObject.SetActive(true);
+                    var sr = bot.GetComponentInChildren<SpriteRenderer>();
+                    _botDots[dotIndex].color = sr != null ? sr.color : Color.red;
+                    SetDotPos(_botDots[dotIndex], bot.transform.position, mapRadius);
+                }
+                dotIndex++;
+            }
+
+            // 나머지 비활성
+            for (int i = dotIndex; i < _botDots.Length; i++)
+            {
+                if (_botDots[i] != null)
+                    _botDots[i].gameObject.SetActive(false);
+            }
+        }
+
+        private Player.PlayerController ResolveLocalPlayerController()
+        {
+            Network.NetworkPlayer localNetworkPlayer = Network.NetworkPlayer.LocalPlayer;
+            if (localNetworkPlayer != null)
+            {
+                var networkLocalController = localNetworkPlayer.GetComponent<Player.PlayerController>();
+                if (networkLocalController != null)
+                    return networkLocalController;
+            }
+
+            Player.PlayerController localController = Player.PlayerController.LocalController;
+            if (localController != null)
+                return localController;
+
+            if (_cachedLocalPlayer != null)
+                return _cachedLocalPlayer;
+
+            if (Time.unscaledTime < _nextLocalPlayerLookupAt)
+                return null;
+
+            _nextLocalPlayerLookupAt = Time.unscaledTime + 1f;
+            _cachedLocalPlayer = FindObjectOfType<Player.PlayerController>();
+            return _cachedLocalPlayer;
         }
 
         private void SetDotPos(Image dot, Vector3 worldPos, float mapRadius)
@@ -196,6 +334,20 @@ namespace Systems
             float ny = worldPos.y / mapRadius;
             dot.rectTransform.anchoredPosition =
                 new Vector2(nx * _minimapUsableRadius, ny * _minimapUsableRadius);
+        }
+
+        private static Color GetRemotePlayerDotColor(Network.NetworkPlayer player)
+        {
+            if (player == null) return Color.yellow;
+
+            uint stableId = player.netId;
+            if (stableId == 0 && player.netIdentity != null)
+                stableId = player.netIdentity.netId;
+
+            int colorIndex = (int)(stableId % (uint)REMOTE_PLAYER_DOT_COLORS.Length);
+            Color color = REMOTE_PLAYER_DOT_COLORS[colorIndex];
+            color.a = 1f;
+            return color;
         }
     }
 }

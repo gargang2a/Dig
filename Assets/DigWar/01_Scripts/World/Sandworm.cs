@@ -1,17 +1,21 @@
-using UnityEngine;
+﻿using UnityEngine;
 using System.Collections.Generic;
 using Core;
+using Mirror;
 
 namespace World
 {
     /// <summary>
-    /// 맵에 항상 상주하는 거대한 모래벌레.
-    /// 원형 마디(Segment)로 이루어진 몸체가 지렁이처럼 꿈틀대며 이동한다.
-    /// 흙을 다지며(터널 마스크를 지우며) 맵을 유유히 배회한다.
-    /// 플레이어/AI와 부딪히면 즉사시키며, 지나간 자리에 고가치 보석을 뿌린다.
+    /// 맵을 순회하는 거대 샌드웜.
+    /// 머리+세그먼트 구조로 이동하며 지렁이처럼 이어진 몸통을 만든다.
+    /// 이동 경로에서 터널 마스크를 지우고 맵을 순회한다.
+    /// 플레이어/AI와 충돌하면 즉시 처치하며, 이동 경로에 젬을 드롭한다.
     /// </summary>
     public class Sandworm : MonoBehaviour
     {
+        private static readonly HashSet<Sandworm> _activeWorms = new HashSet<Sandworm>();
+        public static IReadOnlyCollection<Sandworm> ActiveWorms => _activeWorms;
+
         [Header("Movement")]
         [Tooltip("이동 속도 (월드 유닛/초)")]
         [SerializeField] private float _speed = 4f;
@@ -20,24 +24,24 @@ namespace World
         [Tooltip("방향 전환 주기 (초)")]
         [SerializeField] private float _dirChangeInterval = 3f;
 
-        [Header("Erasing (흙 덮기)")]
-        [Tooltip("흙을 덮는 브러쉬 반경 (월드 유닛)")]
+        [Header("Erasing (파기)")]
+        [Tooltip("홀을 지우는 브러시 반경 (월드 유닛)")]
         [SerializeField] private float _eraseRadius = 3f;
         [Tooltip("EraseHole 호출 최소 이동 거리")]
         [SerializeField] private float _eraseStepDistance = 0.3f;
 
-        [Header("Body Segments (마디 몸통)")]
-        [Tooltip("몸통 마디 개수")]
+        [Header("Body Segments")]
+        [Tooltip("몸통 세그먼트 개수")]
         [SerializeField] private int _segmentCount = 8;
-        [Tooltip("마디 간 간격 (월드 유닛)")]
+        [Tooltip("세그먼트 간격 (월드 유닛)")]
         [SerializeField] private float _segmentSpacing = 0.8f;
         [Tooltip("머리 크기")]
         [SerializeField] private float _headScale = 2.5f;
         [Tooltip("꼬리 끝 크기 비율 (머리 대비)")]
         [SerializeField] private float _tailScaleRatio = 0.5f;
-        [Tooltip("머리 스프라이트")]
+        [Tooltip("Head sprite")]
         [SerializeField] private Sprite _headSprite;
-        [Tooltip("몸통 마디 스프라이트")]
+        [Tooltip("Body segment sprite")]
         [SerializeField] private Sprite _bodySprite;
         [Tooltip("머리 색상")]
         [SerializeField] private Color _headColor = new Color(0.6f, 0.3f, 0.15f, 1f);
@@ -45,9 +49,9 @@ namespace World
         [SerializeField] private Color _bodyColor = new Color(0.5f, 0.25f, 0.12f, 1f);
 
         [Header("Gem Spawning")]
-        [Tooltip("보석 배출 간격 (이동 거리 기준)")]
+        [Tooltip("젬 배출 간격 (이동 거리 기준)")]
         [SerializeField] private float _gemDropDistance = 2f;
-        [Tooltip("배출할 보석 프리팹")]
+        [Tooltip("Gem prefab to drop")]
         [SerializeField] private GameObject _gemPrefab;
 
         // 내부 상태
@@ -56,20 +60,28 @@ namespace World
         private float _gemDropAccum;
         private float _mapRadius;
 
-        // 세그먼트 시스템 (위치 히스토리 기반)
+        // 세그먼트 리스트(위치 히스토리 기반)
         private readonly List<Vector3> _positionHistory = new List<Vector3>(256);
         private readonly List<Transform> _segments = new List<Transform>();
+        private readonly List<Network.NetworkPlayer> _hazardPlayerSnapshot = new List<Network.NetworkPlayer>(32);
+        private readonly List<Network.NetworkBot> _hazardBotSnapshot = new List<Network.NetworkBot>(64);
         private float _distanceMoved;
 
-        /// <summary>미니맵 등 외부에서 마디 위치를 읽기 위한 프로퍼티.</summary>
+        /// <summary>미니맵 렌더러에서 세그먼트 위치를 읽기 위한 프로퍼티.</summary>
         public IReadOnlyList<Transform> Segments => _segments;
 
         private const float WALL_AVOID_DISTANCE = 8f;
         private const float HISTORY_STEP = 0.15f; // 히스토리 기록 최소 거리
         private const int SORTING_ORDER_HEAD = 20;
+        private const float HAZARD_KILL_RADIUS_SCALE = 0.45f;
+        private const float HAZARD_CHECK_INTERVAL = 0.05f;
+
+        private static bool IsNetworkMode => NetworkClient.active || NetworkServer.active;
+        private float _hazardCheckTimer;
 
         private void Start()
         {
+
             if (GameManager.Instance != null && GameManager.Instance.Settings != null)
                 _mapRadius = GameManager.Instance.Settings.MapRadius;
             else
@@ -82,12 +94,22 @@ namespace World
             InitializeHistory();
         }
 
+        private void OnEnable()
+        {
+            _activeWorms.Add(this);
+        }
+
+        private void OnDisable()
+        {
+            _activeWorms.Remove(this);
+        }
+
         /// <summary>
-        /// 머리 + N개의 마디 SpriteRenderer를 생성한다.
+        /// 머리 + N개의 몸통 세그먼트 SpriteRenderer를 생성한다.
         /// </summary>
         private void CreateSegments()
         {
-            // 머리 (자기 자신의 자식)
+            // 머리 생성(자기 자신의 자식)
             var headObj = new GameObject("Head");
             headObj.transform.SetParent(transform);
             headObj.transform.localPosition = Vector3.zero;
@@ -97,7 +119,7 @@ namespace World
             headSR.color = _headColor;
             headSR.sortingOrder = SORTING_ORDER_HEAD;
 
-            // Collider는 머리에만
+            // Collider는 머리에만 사용
             var col = gameObject.GetComponent<CircleCollider2D>();
             if (col == null) col = gameObject.AddComponent<CircleCollider2D>();
             col.isTrigger = true;
@@ -107,11 +129,11 @@ namespace World
             if (rb == null) rb = gameObject.AddComponent<Rigidbody2D>();
             rb.bodyType = RigidbodyType2D.Kinematic;
 
-            // 몸통 마디들 (비활성 상태로 생성 → 첫 프레임 번쩍임 방지)
+            // 몸통 세그먼트 생성(초기 배치 전에는 비활성화)
             for (int i = 0; i < _segmentCount; i++)
             {
                 var seg = new GameObject($"Segment_{i}");
-                seg.SetActive(false); // 위치 배치 전까지 비활성
+                seg.SetActive(false); // 위치 배치 전까지 비활성화
                 seg.transform.SetParent(transform.parent ?? transform);
                 seg.transform.position = transform.position; // 머리 위치로 초기화
 
@@ -129,7 +151,7 @@ namespace World
         }
 
         /// <summary>
-        /// 초기 위치 히스토리를 머리 뒤쪽으로 채우고, 세그먼트 활성화.
+        /// 초기 위치 히스토리를 머리 뒤쪽으로 채우고 세그먼트를 활성화한다.
         /// </summary>
         private void InitializeHistory()
         {
@@ -142,7 +164,7 @@ namespace World
                 _positionHistory.Add(transform.position + backDir * (i * HISTORY_STEP));
             }
 
-            // 초기 위치에 세그먼트 배치 후 활성화 (번쩍임 방지)
+            // 초기 위치로 세그먼트 배치 후 활성화
             UpdateSegments();
             for (int i = 0; i < _segments.Count; i++)
                 _segments[i].gameObject.SetActive(true);
@@ -150,12 +172,22 @@ namespace World
 
         private void Update()
         {
+            if (IsNetworkMode && !NetworkServer.active)
+            {
+                // 클라이언트에서는 서버 동기화된 월드 위치만 따라간다.
+                RecordHistory();
+                UpdateSegments();
+                TryErase(allowGemDrop: false);
+                return;
+            }
+
             UpdateAI();
             Rotate();
             Move();
             RecordHistory();
             UpdateSegments();
-            TryErase();
+            TryErase(allowGemDrop: true);
+            ServerTickHazardKills();
         }
 
         // ===== AI (방향 전환 + 벽 회피) =====
@@ -192,7 +224,7 @@ namespace World
         // ===== 세그먼트 몸통 시스템 =====
 
         /// <summary>
-        /// 머리가 일정 거리 이동할 때마다 위치를 기록한다.
+        /// 머리가 일정 거리 이동할 때마다 위치를 히스토리에 기록한다.
         /// </summary>
         private void RecordHistory()
         {
@@ -208,15 +240,15 @@ namespace World
         }
 
         /// <summary>
-        /// 각 마디를 히스토리 상의 적절한 위치에 부드럽게 배치한다.
+        /// 각 세그먼트를 히스토리 곡선 위치에 부드럽게 배치한다.
         /// </summary>
         private void UpdateSegments()
         {
-            float smoothSpeed = 15f; // 보간 속도 (높을수록 즉각 반응)
+            float smoothSpeed = 15f; // 보간 속도
 
             for (int i = 0; i < _segments.Count; i++)
             {
-                // 히스토리 인덱스를 소수점으로 계산하여 두 점 사이를 보간
+                // 히스토리 인덱스를 실수로 계산해 샘플 사이를 보간
                 float floatIndex = (i + 1) * _segmentSpacing / HISTORY_STEP;
                 int indexA = Mathf.FloorToInt(floatIndex);
                 int indexB = indexA + 1;
@@ -226,11 +258,11 @@ namespace World
                 float frac = floatIndex - Mathf.Floor(floatIndex);
                 Vector3 targetPos = Vector3.Lerp(_positionHistory[indexA], _positionHistory[indexB], frac);
 
-                // 부드러운 위치 이동 (Lerp)
+                // 부드러운 위치 이동
                 _segments[i].position = Vector3.Lerp(
                     _segments[i].position, targetPos, Time.deltaTime * smoothSpeed);
 
-                // 이전 마디(또는 머리) 방향으로 부드러운 회전
+                // 이전 세그먼트(또는 머리) 방향으로 회전
                 Vector3 lookTarget = (i == 0) ? transform.position : _segments[i - 1].position;
                 Vector3 lookDir = lookTarget - _segments[i].position;
                 if (lookDir.sqrMagnitude > 0.001f)
@@ -243,12 +275,12 @@ namespace World
             }
         }
 
-        // ===== 흙 덮기 + 보석 배출 =====
+        // ===== 지형 파기 + 젬 배출 =====
 
         /// <summary>
-        /// 매 프레임 이동 시 흙 덮기 요청.
+        /// 일정 이동 거리마다 홀 지우기 요청.
         /// </summary>
-        private void TryErase()
+        private void TryErase(bool allowGemDrop)
         {
             float frameDist = _speed * Time.deltaTime;
             _distanceMoved += frameDist;
@@ -259,10 +291,10 @@ namespace World
             var maskMgr = Tunnel.TunnelMaskManager.Instance;
             if (maskMgr == null) return;
 
-            // 머리 위치: 머리 크기에 맞는 반경으로 지우기
+            // 머리 위치: 머리 크기에 맞는 반경으로 파기
             maskMgr.EraseHole(transform.position, _headScale * 0.5f);
 
-            // 각 마디 위치: 마디 크기에 맞는 반경으로 지우기
+            // 각 세그먼트 위치: 세그먼트 크기에 맞는 반경으로 파기
             for (int i = 0; i < _segments.Count; i++)
             {
                 float t = (float)(i + 1) / _segmentCount;
@@ -270,9 +302,9 @@ namespace World
                 maskMgr.EraseHole(_segments[i].position, segScale * 0.5f);
             }
 
-            // 보석 배출
+            // 젬 배출
             _gemDropAccum += _eraseStepDistance;
-            if (_gemDropAccum >= _gemDropDistance)
+            if (allowGemDrop && _gemDropAccum >= _gemDropDistance)
             {
                 _gemDropAccum -= _gemDropDistance;
                 SpawnGem();
@@ -283,7 +315,7 @@ namespace World
         {
             if (_gemPrefab == null) return;
 
-            // 꼬리 끝 위치에서 보석 배출
+            // 꼬리 끝 위치에서 젬 배출
             Vector3 spawnPos;
             if (_segments.Count > 0)
                 spawnPos = _segments[_segments.Count - 1].position;
@@ -292,19 +324,97 @@ namespace World
 
             spawnPos += (Vector3)(Random.insideUnitCircle * 0.5f);
 
+            if (IsNetworkMode)
+            {
+                if (!NetworkServer.active) return;
+
+                if (World.GemSpawner.Instance != null)
+                    World.GemSpawner.Instance.DropGemAt(spawnPos);
+                else
+                    Debug.LogWarning("[Sandworm] GemSpawner missing in network mode. Gem drop skipped.");
+                return;
+            }
+
             if (Core.ObjectPoolManager.Instance != null)
                 Core.ObjectPoolManager.Instance.Spawn(_gemPrefab, spawnPos, Quaternion.identity);
             else
                 Instantiate(_gemPrefab, spawnPos, Quaternion.identity);
         }
 
+        private void ServerTickHazardKills()
+        {
+            if (!IsNetworkMode || !NetworkServer.active)
+                return;
+
+            _hazardCheckTimer -= Time.deltaTime;
+            if (_hazardCheckTimer > 0f)
+                return;
+
+            _hazardCheckTimer = HAZARD_CHECK_INTERVAL;
+
+            EvaluateHazardKillsAt(transform.position, _headScale * HAZARD_KILL_RADIUS_SCALE);
+
+            for (int i = 0; i < _segments.Count; i++)
+            {
+                float t = (float)(i + 1) / _segmentCount;
+                float segScale = Mathf.Lerp(_headScale, _headScale * _tailScaleRatio, t);
+                EvaluateHazardKillsAt(_segments[i].position, segScale * HAZARD_KILL_RADIUS_SCALE);
+            }
+        }
+
+        private void EvaluateHazardKillsAt(Vector3 center, float killRadius)
+        {
+            float sqrKillRadius = killRadius * killRadius;
+
+            _hazardPlayerSnapshot.Clear();
+            foreach (Network.NetworkPlayer player in Network.NetworkPlayer.ActivePlayers)
+                _hazardPlayerSnapshot.Add(player);
+
+            for (int i = 0; i < _hazardPlayerSnapshot.Count; i++)
+            {
+                Network.NetworkPlayer player = _hazardPlayerSnapshot[i];
+                if (player == null || player.IsDead) continue;
+                if ((player.transform.position - center).sqrMagnitude > sqrKillRadius) continue;
+
+                player.ServerDieFromHazard("Sandworm");
+            }
+
+            _hazardBotSnapshot.Clear();
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+                _hazardBotSnapshot.Add(bot);
+
+            for (int i = 0; i < _hazardBotSnapshot.Count; i++)
+            {
+                Network.NetworkBot bot = _hazardBotSnapshot[i];
+                if (bot == null) continue;
+                if ((bot.transform.position - center).sqrMagnitude > sqrKillRadius) continue;
+
+                Player.IDigger digger = bot.GetComponent<Player.IDigger>();
+                digger?.Die();
+            }
+        }
+
         // ===== 충돌 (즉사) =====
         private void OnTriggerEnter2D(Collider2D other)
         {
+            if (IsNetworkMode && !NetworkServer.active)
+                return;
+
+            var networkPlayer = other.GetComponent<Network.NetworkPlayer>();
+            if (networkPlayer == null)
+                networkPlayer = other.GetComponentInParent<Network.NetworkPlayer>();
+
+            if (networkPlayer != null)
+            {
+                if (networkPlayer.ServerDieFromHazard("Sandworm"))
+                    Debug.Log($"[Sandworm] {other.gameObject.name} 충돌 즉사");
+                return;
+            }
+
             var digger = other.GetComponent<Player.IDigger>();
             if (digger != null)
             {
-                Debug.Log($"🐛 [Sandworm] {other.gameObject.name} 삼킴!");
+                Debug.Log($"[Sandworm] {other.gameObject.name} 충돌 즉사");
                 digger.Die();
             }
         }
@@ -327,3 +437,5 @@ namespace World
 #endif
     }
 }
+
+

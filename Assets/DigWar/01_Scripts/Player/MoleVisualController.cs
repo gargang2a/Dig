@@ -34,7 +34,9 @@ namespace Player
         [SerializeField] private float _leanSmoothing = 8f;
 
         [Header("Drill Spin (LineRenderer 기반 회전 라인)")]
+        #pragma warning disable CS0414
         [SerializeField] private bool _enableDrillLines = false;
+        #pragma warning restore CS0414
         [SerializeField] private Color _drillLineColor = new Color(0.8f, 0.8f, 0.8f, 0.5f);
         [SerializeField] private float _drillOffsetY = 0.4f;
         [SerializeField] private float _drillRadius = 0.15f;

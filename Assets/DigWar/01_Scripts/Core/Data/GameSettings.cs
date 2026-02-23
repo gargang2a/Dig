@@ -60,6 +60,8 @@ namespace Core.Data
         [Header("맵")]
         [Tooltip("원형 맵 반경 (월드 유닛)")]
         [Min(10f)]  public float MapRadius = 50f;
+        [Tooltip("플레이어 초기 스폰 반경 비율 (MapRadius * 비율)")]
+        [Range(0.1f, 1f)] public float PlayerSpawnRadiusRatio = 0.6f;
         [Tooltip("경계 근처 경고 시작 거리 (안쪽)")]
         [Min(1f)]   public float MapWarningZone = 5f;
         [Tooltip("경계선 원 해상도 (점 개수)")]

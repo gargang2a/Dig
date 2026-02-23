@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 
+    IL2CPP Code Stripping Protection
+    WebGL 빌드 시 Mirror 리플렉션 코드가 제거되지 않도록 보호.
+-->
+<linker>
+    <!-- Mirror 코어 -->
+    <assembly fullname="Mirror" preserve="all"/>
+    
+    <!-- Mirror Transports -->
+    <assembly fullname="Mirror.Transports" preserve="all"/>
+    
+    <!-- SimpleWebTransport (WebGL 필수) -->
+    <assembly fullname="SimpleWebTransport" preserve="all"/>
+    
+    <!-- 게임 네트워크 코드 (SyncVar, Command, ClientRpc 등 리플렉션 사용) -->
+    <assembly fullname="Assembly-CSharp" preserve="all">
+        <type fullname="Network.*" preserve="all"/>
+    </assembly>
+</linker>

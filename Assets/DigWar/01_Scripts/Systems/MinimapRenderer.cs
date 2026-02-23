@@ -8,7 +8,7 @@ namespace Systems
     /// <summary>
     /// 개선된 미니맵 렌더러.
     /// - TunnelMaskManager의 RenderTexture를 배경으로 직접 표시 (터널 실시간 반영)
-    /// - 플레이어(초록), 봇(빨강), 샌드웜(주황) 위치를 도트로 표시
+    /// - 본인(초록), 타 플레이어(고유색), 봇(팔레트 색), 샌드웜(주황) 위치를 도트로 표시
     /// - CPU 텍스처 페인팅 제거 → GPU RT 직접 참조로 성능 대폭 향상
     ///
     /// UI 계층: Minimap Bg → [TunnelMaskImage] → [EntityDots] → Ring
@@ -30,11 +30,27 @@ namespace Systems
 
         // Entity dot UI elements
         private RectTransform _playerDotRT;
+        private Image _playerDotImage;
         private RectTransform[] _botDotRTs;
+        private Image[] _botDotImages;
         private RectTransform[] _sandwormDotRTs; // 머리 + 모든 마디
+
+        private static readonly Color[] REMOTE_PLAYER_DOT_COLORS =
+        {
+            new Color(1f, 0.55f, 0.25f),   // orange
+            new Color(1f, 0.82f, 0.25f),   // amber
+            new Color(0.35f, 0.78f, 1f),   // sky blue
+            new Color(0.9f, 0.48f, 1f),    // magenta
+            new Color(1f, 0.55f, 0.75f),   // pink
+            new Color(0.55f, 0.65f, 1f),   // indigo
+            new Color(1f, 0.4f, 0.4f),     // red
+            new Color(0.55f, 1f, 0.75f),   // mint
+        };
 
         // 도트 컨테이너
         private RectTransform _dotsContainer;
+        private Player.PlayerController _cachedLocalPlayer;
+        private float _nextLocalPlayerLookupAt;
 
         private void Start()
         {
@@ -57,7 +73,6 @@ namespace Systems
         private void SetupUI()
         {
             var hud = GetComponent<GameHUD>();
-            if (hud == null) hud = FindObjectOfType<GameHUD>();
             if (hud == null || hud.MinimapRoot == null) return;
 
             _minimapRoot = hud.MinimapRoot;
@@ -76,16 +91,12 @@ namespace Systems
             _dotsContainer.sizeDelta = Vector2.zero;
 
             // 3) 플레이어 도트
-            _playerDotRT = CreateDot("PlayerDot", _playerDotColor, _playerDotSize);
+            _playerDotRT = CreateDot("PlayerDot", _playerDotColor, _playerDotSize, out _playerDotImage);
 
 
-            // 4) 봇 도트 (Start 시점에 없으면 LateUpdate에서 지연 초기화)
-            var bots = FindObjectsOfType<Player.AIController>();
-            _botDotRTs = new RectTransform[bots.Length];
-            for (int i = 0; i < bots.Length; i++)
-            {
-                _botDotRTs[i] = CreateDot($"BotDot_{i}", _botDotColor, _botDotSize);
-            }
+            // 4) 봇 도트 (런타임 수량 변경 대응)
+            _botDotRTs = new RectTransform[0];
+            _botDotImages = new Image[0];
 
             // 5) 샌드웜 도트 → UpdateSandwormDots에서 자동 생성
         }
@@ -121,16 +132,16 @@ namespace Systems
         }
 
         // ===== 도트 생성 =====
-        private RectTransform CreateDot(string name, Color color, float size)
+        private RectTransform CreateDot(string name, Color color, float size, out Image image)
         {
             var obj = new GameObject(name);
             obj.transform.SetParent(_dotsContainer, false);
 
-            var img = obj.AddComponent<Image>();
-            img.color = color;
-            img.raycastTarget = false;
+            image = obj.AddComponent<Image>();
+            image.color = color;
+            image.raycastTarget = false;
 
-            var rt = img.rectTransform;
+            var rt = image.rectTransform;
             rt.sizeDelta = new Vector2(size, size);
             rt.anchoredPosition = Vector2.zero;
 
@@ -142,7 +153,7 @@ namespace Systems
         {
             if (_playerDotRT == null) return;
 
-            var player = FindObjectOfType<Player.PlayerController>();
+            Player.PlayerController player = ResolveLocalPlayerController();
             if (player == null)
             {
                 _playerDotRT.gameObject.SetActive(false);
@@ -150,37 +161,92 @@ namespace Systems
             }
 
             _playerDotRT.gameObject.SetActive(true);
+            if (_playerDotImage != null)
+                _playerDotImage.color = _playerDotColor;
             _playerDotRT.anchoredPosition = WorldToMinimap(player.transform.position);
         }
 
         private void UpdateBotDots()
         {
-            if (_botDotRTs == null) return;
+            if (_botDotRTs == null || _botDotImages == null) return;
 
-            var bots = FindObjectsOfType<Player.AIController>();
-            for (int i = 0; i < _botDotRTs.Length; i++)
+            int remotePlayerCount = 0;
+            foreach (Network.NetworkPlayer player in Network.NetworkPlayer.ActivePlayers)
             {
-                if (i < bots.Length && bots[i] != null)
-                {
-                    _botDotRTs[i].gameObject.SetActive(true);
-                    _botDotRTs[i].anchoredPosition = WorldToMinimap(bots[i].transform.position);
-                }
-                else
-                {
-                    _botDotRTs[i].gameObject.SetActive(false);
-                }
+                if (player != null && !player.isLocalPlayer)
+                    remotePlayerCount++;
             }
+
+            int networkBotCount = 0;
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            {
+                if (bot != null)
+                    networkBotCount++;
+            }
+
+            EnsureBotDotCapacity(remotePlayerCount + networkBotCount);
+
+            int index = 0;
+
+            // 1) 리모트 플레이어 (각 플레이어별 고유색)
+            foreach (Network.NetworkPlayer player in Network.NetworkPlayer.ActivePlayers)
+            {
+                if (player == null || player.isLocalPlayer) continue;
+                if (index >= _botDotRTs.Length) break;
+
+                RectTransform dotRt = _botDotRTs[index];
+                Image dotImage = _botDotImages[index];
+                dotRt.gameObject.SetActive(true);
+                dotRt.sizeDelta = new Vector2(_botDotSize + 1f, _botDotSize + 1f);
+                dotRt.anchoredPosition = WorldToMinimap(player.transform.position);
+                if (dotImage != null)
+                    dotImage.color = GetRemotePlayerDotColor(player);
+
+                index++;
+            }
+
+            // 2) 네트워크 봇 (봇 팔레트 색상)
+            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            {
+                if (bot == null) continue;
+                if (index >= _botDotRTs.Length) break;
+
+                RectTransform dotRt = _botDotRTs[index];
+                Image dotImage = _botDotImages[index];
+                dotRt.gameObject.SetActive(true);
+                dotRt.sizeDelta = new Vector2(_botDotSize, _botDotSize);
+                dotRt.anchoredPosition = WorldToMinimap(bot.transform.position);
+                if (dotImage != null)
+                    dotImage.color = GetNetworkBotDotColor(bot);
+
+                index++;
+            }
+
+            for (int i = index; i < _botDotRTs.Length; i++)
+                _botDotRTs[i].gameObject.SetActive(false);
         }
 
         private void UpdateSandwormDots()
         {
-            var worms = FindObjectsOfType<World.Sandworm>();
-            if (worms.Length == 0) return;
+            if (World.Sandworm.ActiveWorms.Count == 0)
+            {
+                SetDotArrayActive(_sandwormDotRTs, false);
+                return;
+            }
 
             // 필요한 총 도트 수 계산 (각 벌레의 머리 + 마디)
             int needed = 0;
-            for (int w = 0; w < worms.Length; w++)
-                needed += 1 + worms[w].Segments.Count;
+            foreach (World.Sandworm worm in World.Sandworm.ActiveWorms)
+            {
+                if (worm == null) continue;
+                needed += 1 + worm.Segments.Count;
+            }
+
+            if (needed <= 0)
+            {
+                SetDotArrayActive(_sandwormDotRTs, false);
+                return;
+            }
 
             // 도트 수가 맞지 않으면 (재)생성
             if (_sandwormDotRTs == null || _sandwormDotRTs.Length != needed)
@@ -191,26 +257,31 @@ namespace Systems
 
                 _sandwormDotRTs = new RectTransform[needed];
                 int idx = 0;
-                for (int w = 0; w < worms.Length; w++)
+                int wormIndex = 0;
+                foreach (World.Sandworm worm in World.Sandworm.ActiveWorms)
                 {
-                    int segCount = 1 + worms[w].Segments.Count;
+                    if (worm == null) continue;
+
+                    int segCount = 1 + worm.Segments.Count;
                     for (int i = 0; i < segCount; i++)
                     {
                         float t = (float)i / segCount;
                         float size = Mathf.Lerp(_sandwormDotSize, _sandwormDotSize * 0.4f, t);
                         Color c = Color.Lerp(_sandwormDotColor, _sandwormDotColor * 0.6f, t);
                         c.a = Mathf.Lerp(1f, 0.5f, t);
-                        _sandwormDotRTs[idx++] = CreateDot($"WormDot_{w}_{i}", c, size);
+                        _sandwormDotRTs[idx++] = CreateDot($"WormDot_{wormIndex}_{i}", c, size, out _);
                     }
+                    wormIndex++;
                 }
-                Debug.Log($"[Minimap] 샌드웜 {worms.Length}마리, 도트 {needed}개 생성");
+                Debug.Log($"[Minimap] 샌드웜 도트 {needed}개 생성");
             }
 
             // 위치 업데이트
             int dotIdx = 0;
-            for (int w = 0; w < worms.Length; w++)
+            foreach (World.Sandworm worm in World.Sandworm.ActiveWorms)
             {
-                var worm = worms[w];
+                if (worm == null) continue;
+
                 // 머리
                 if (dotIdx < _sandwormDotRTs.Length)
                     _sandwormDotRTs[dotIdx++].anchoredPosition = WorldToMinimap(worm.transform.position);
@@ -223,6 +294,88 @@ namespace Systems
                     _sandwormDotRTs[dotIdx++].anchoredPosition = WorldToMinimap(worm.Segments[i].position);
                 }
             }
+        }
+
+        private void EnsureBotDotCapacity(int requiredCount)
+        {
+            if (requiredCount <= 0)
+            {
+                if (_botDotRTs == null) _botDotRTs = new RectTransform[0];
+                if (_botDotImages == null) _botDotImages = new Image[0];
+                return;
+            }
+
+            if (_botDotRTs == null)
+                _botDotRTs = new RectTransform[0];
+            if (_botDotImages == null)
+                _botDotImages = new Image[0];
+
+            if (_botDotRTs.Length >= requiredCount) return;
+
+            int oldLength = _botDotRTs.Length;
+            System.Array.Resize(ref _botDotRTs, requiredCount);
+            System.Array.Resize(ref _botDotImages, requiredCount);
+            for (int i = oldLength; i < requiredCount; i++)
+                _botDotRTs[i] = CreateDot($"BotDot_{i}", _botDotColor, _botDotSize, out _botDotImages[i]);
+        }
+
+        private Player.PlayerController ResolveLocalPlayerController()
+        {
+            Network.NetworkPlayer localNetworkPlayer = Network.NetworkPlayer.LocalPlayer;
+            if (localNetworkPlayer != null)
+            {
+                var networkLocalController = localNetworkPlayer.GetComponent<Player.PlayerController>();
+                if (networkLocalController != null)
+                    return networkLocalController;
+            }
+
+            Player.PlayerController localController = Player.PlayerController.LocalController;
+            if (localController != null)
+                return localController;
+
+            if (_cachedLocalPlayer != null)
+                return _cachedLocalPlayer;
+
+            if (Time.unscaledTime < _nextLocalPlayerLookupAt)
+                return null;
+
+            _nextLocalPlayerLookupAt = Time.unscaledTime + 1f;
+            _cachedLocalPlayer = FindObjectOfType<Player.PlayerController>();
+            return _cachedLocalPlayer;
+        }
+
+        private static void SetDotArrayActive(RectTransform[] dots, bool active)
+        {
+            if (dots == null) return;
+            for (int i = 0; i < dots.Length; i++)
+            {
+                if (dots[i] != null)
+                    dots[i].gameObject.SetActive(active);
+            }
+        }
+
+        private static Color GetRemotePlayerDotColor(Network.NetworkPlayer player)
+        {
+            if (player == null) return Color.yellow;
+
+            uint stableId = player.netId;
+            if (stableId == 0 && player.netIdentity != null)
+                stableId = player.netIdentity.netId;
+
+            int colorIndex = (int)(stableId % (uint)REMOTE_PLAYER_DOT_COLORS.Length);
+            Color color = REMOTE_PLAYER_DOT_COLORS[colorIndex];
+            color.a = 1f;
+            return color;
+        }
+
+        private static Color GetNetworkBotDotColor(Network.NetworkBot bot)
+        {
+            if (bot == null) return Color.red;
+
+            int index = Mathf.Abs(bot.BotIndex) % Network.NetworkBot.BOT_COLORS.Length;
+            Color color = Network.NetworkBot.BOT_COLORS[index];
+            color.a = 0.9f;
+            return color;
         }
 
         // ===== 좌표 변환 =====

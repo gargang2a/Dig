@@ -58,6 +58,15 @@ namespace Systems
             _velocity = Vector3.zero;
         }
 
+        /// <summary>
+        /// 추적 타겟을 동적으로 변경한다. 멀티플레이에서 로컬 플레이어 할당 시 사용.
+        /// </summary>
+        public void SetTarget(Transform newTarget)
+        {
+            _target = newTarget;
+            if (newTarget != null) SnapToTarget();
+        }
+
 #if UNITY_EDITOR
         private void OnValidate()
         {

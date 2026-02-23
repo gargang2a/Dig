@@ -40,10 +40,16 @@ namespace Core
             DontDestroyOnLoad(gameObject);
         }
 
-        // 메인 메뉴가 StartGame()을 호출할 때까지 대기
-
+        // 게임 라운드 시작은 MainMenuUI에서만 트리거한다.
         public void StartGame()
         {
+            // 중복 시작 호출을 방지해 OnGameStarted 이중 발행(중복 스폰)을 막는다.
+            if (IsGameActive)
+            {
+                Debug.Log("[GameManager] StartGame 중복 호출 무시");
+                return;
+            }
+
             CurrentScore = 0f;
             IsGameActive = true;
             OnScoreChanged?.Invoke(CurrentScore);
@@ -72,6 +78,16 @@ namespace Core
             IsGameActive = false;
             OnPlayerDied?.Invoke();
             Debug.Log($"[GameManager] 사망! 최종 점수: {CurrentScore:F0}");
+        }
+
+        /// <summary>
+        /// Slither.io 스타일 리스폰. 점수 초기화, 게임 재활성화.
+        /// </summary>
+        public void ResetForRespawn()
+        {
+            CurrentScore = 0f;
+            IsGameActive = true;
+            OnScoreChanged?.Invoke(CurrentScore);
         }
 
 #if UNITY_EDITOR

@@ -18,6 +18,7 @@ namespace Systems
         private GameSettings _settings;
         private float _zoomVelocity;
         private float _targetZoom;
+        private float _nextPlayerLookupAt;
 
         private void Start()
         {
@@ -29,11 +30,15 @@ namespace Systems
             }
 
             _settings = GameManager.Instance.Settings;
+            if (_mainCamera == null)
+                _mainCamera = Camera.main;
+
+            ResolvePlayerTransform(force: true);
 
             if (_mainCamera != null)
             {
                 // 초기 줌 설정
-                float initialScale = _settings.MinScale;
+                float initialScale = ResolvePlayerScaleOrDefault();
                 _targetZoom = _settings.BaseCameraZoom + initialScale * _settings.CameraZoomPerScale;
                 _mainCamera.orthographicSize = _targetZoom;
             }
@@ -43,7 +48,12 @@ namespace Systems
 
         private void LateUpdate()
         {
-            if (_playerTransform == null || _mainCamera == null) return;
+            if (_mainCamera == null || _settings == null) return;
+
+            if (!IsValidTrackedPlayer(_playerTransform))
+                ResolvePlayerTransform();
+
+            if (_playerTransform == null) return;
 
             // 플레이어의 현재 스케일(MoleGrowth가 제어)을 기준으로 목표 줌 계산
             float currentScale = _playerTransform.localScale.x;
@@ -53,6 +63,60 @@ namespace Systems
                 _mainCamera.orthographicSize, _targetZoom,
                 ref _zoomVelocity, _zoomSmoothTime
             );
+        }
+
+        private float ResolvePlayerScaleOrDefault()
+        {
+            if (_playerTransform == null)
+                return _settings.MinScale;
+
+            return Mathf.Max(_settings.MinScale, _playerTransform.localScale.x);
+        }
+
+        private bool IsValidTrackedPlayer(Transform target)
+        {
+            if (target == null) return false;
+
+            var trackedNetPlayer = target.GetComponent<Network.NetworkPlayer>();
+            if (trackedNetPlayer == null) return true;
+            return trackedNetPlayer.isLocalPlayer;
+        }
+
+        private void ResolvePlayerTransform(bool force = false)
+        {
+            if (!force && Time.unscaledTime < _nextPlayerLookupAt) return;
+            _nextPlayerLookupAt = Time.unscaledTime + 0.5f;
+
+            Network.NetworkPlayer localNetworkPlayer = Network.NetworkPlayer.LocalPlayer;
+            if (localNetworkPlayer != null)
+            {
+                _playerTransform = localNetworkPlayer.transform;
+                return;
+            }
+
+            Player.PlayerController localController = Player.PlayerController.LocalController;
+            if (localController != null)
+            {
+                _playerTransform = localController.transform;
+                return;
+            }
+
+            Player.PlayerController[] controllers = FindObjectsOfType<Player.PlayerController>();
+            for (int i = 0; i < controllers.Length; i++)
+            {
+                Player.PlayerController controller = controllers[i];
+                if (controller == null) continue;
+
+                var networkPlayer = controller.GetComponent<Network.NetworkPlayer>();
+                if (networkPlayer == null || networkPlayer.isLocalPlayer)
+                {
+                    _playerTransform = controller.transform;
+                    return;
+                }
+            }
+
+            if (controllers.Length > 0 && controllers[0] != null)
+                _playerTransform = controllers[0].transform;
         }
 
 #if UNITY_EDITOR

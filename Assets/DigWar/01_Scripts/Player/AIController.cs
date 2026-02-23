@@ -1,6 +1,8 @@
 using UnityEngine;
 using Core;
 using Core.Data;
+using System.Collections.Generic;
+using Mirror;
 
 namespace Player
 {
@@ -13,9 +15,13 @@ namespace Player
     [RequireComponent(typeof(Core.MoleGrowth))]
     public class AIController : MonoBehaviour, IDigger
     {
+        private static readonly HashSet<AIController> _activeBots = new HashSet<AIController>();
+        public static IReadOnlyCollection<AIController> ActiveBots => _activeBots;
+
         private GameSettings _settings;
         private Rigidbody2D _rb;
         private bool _isDead;
+        public bool IsDead => _isDead;
 
         // AI 행동
         private float _targetAngle;
@@ -36,16 +42,25 @@ namespace Player
 
         private Core.MoleGrowth _growth;
 
-        private const float ANGLE_CHANGE_INTERVAL = 1.5f;
-        private const float GEM_SEARCH_INTERVAL = 0.5f;
+        private const float ANGLE_CHANGE_INTERVAL = 2.2f;
+        private const float ANGLE_CHANGE_JITTER = 0.4f;
+        private const float RANDOM_TURN_ANGLE = 35f;
+        private const float GEM_SEARCH_INTERVAL = 0.35f;
         private const float GEM_DETECT_RADIUS = 8f;
+        private const float GEM_TARGET_STICKY_RADIUS_MULTIPLIER = 1.4f;
         private const float WALL_AVOID_DISTANCE = 10f;
 
         private void Awake()
         {
+            _activeBots.Add(this);
             _rb = GetComponent<Rigidbody2D>();
             _rb.bodyType = RigidbodyType2D.Kinematic;
             _growth = GetComponent<Core.MoleGrowth>();
+        }
+
+        private void OnDestroy()
+        {
+            _activeBots.Remove(this);
         }
 
         private void Start()
@@ -67,10 +82,18 @@ namespace Player
         private void Update()
         {
             if (_isDead) return;
+            if (_settings == null) return;
 
             UpdateAI();
-            Rotate();
-            Move();
+        }
+
+        private void FixedUpdate()
+        {
+            if (_isDead) return;
+            if (_settings == null) return;
+
+            Rotate(Time.fixedDeltaTime);
+            Move(Time.fixedDeltaTime);
         }
 
         private void UpdateAI()
@@ -117,20 +140,24 @@ namespace Player
             _angleChangeTimer -= Time.deltaTime;
             if (_angleChangeTimer <= 0f)
             {
-                _angleChangeTimer = ANGLE_CHANGE_INTERVAL + Random.Range(-0.5f, 0.5f);
-                _targetAngle += Random.Range(-60f, 60f);
+                _angleChangeTimer = ANGLE_CHANGE_INTERVAL + Random.Range(-ANGLE_CHANGE_JITTER, ANGLE_CHANGE_JITTER);
+                _targetAngle += Random.Range(-RANDOM_TURN_ANGLE, RANDOM_TURN_ANGLE);
             }
         }
 
         private void SearchNearestGem()
         {
-            _targetGem = null;
+            if (IsStickyGemTarget(_targetGem))
+                return;
+
+            Transform bestTarget = null;
             float closestSqr = GEM_DETECT_RADIUS * GEM_DETECT_RADIUS;
 
-            var gems = FindObjectsOfType<World.Gem>();
-            for (int i = 0; i < gems.Length; i++)
+            foreach (World.Gem gem in World.Gem.ActiveGems)
             {
-                Vector2 toGem = gems[i].transform.position - transform.position;
+                if (gem == null) continue;
+
+                Vector2 toGem = gem.transform.position - transform.position;
                 float sqrDist = toGem.sqrMagnitude;
                 if (sqrDist >= closestSqr) continue;
 
@@ -139,18 +166,33 @@ namespace Player
                 if (dot < 0.2f) continue;
 
                 closestSqr = sqrDist;
-                _targetGem = gems[i].transform;
+                bestTarget = gem.transform;
             }
+
+            _targetGem = bestTarget;
         }
 
-        private void Move()
+        private bool IsStickyGemTarget(Transform gemTarget)
+        {
+            if (gemTarget == null) return false;
+            if (!gemTarget.gameObject.activeInHierarchy) return false;
+
+            Vector2 toGem = gemTarget.position - transform.position;
+            float stickyRadius = GEM_DETECT_RADIUS * GEM_TARGET_STICKY_RADIUS_MULTIPLIER;
+            if (toGem.sqrMagnitude > stickyRadius * stickyRadius)
+                return false;
+
+            return true;
+        }
+
+        private void Move(float deltaTime)
         {
             float speed = _settings.BaseSpeed * transform.localScale.x;
             CurrentSpeed = speed;
-            transform.position += transform.up * (speed * Time.deltaTime);
+            transform.position += transform.up * (speed * deltaTime);
         }
 
-        private void Rotate()
+        private void Rotate(float deltaTime)
         {
             Quaternion targetRotation = Quaternion.Euler(0f, 0f, _targetAngle);
             float scale = transform.localScale.x;
@@ -159,7 +201,7 @@ namespace Player
             transform.rotation = Quaternion.RotateTowards(
                 transform.rotation,
                 targetRotation,
-                turnSpeed * Time.deltaTime
+                turnSpeed * deltaTime
             );
         }
 
@@ -172,17 +214,23 @@ namespace Player
                 _growth.AddScore(amount);
         }
 
-        private void OnTriggerEnter2D(Collider2D other)
-        {
-            if (_isDead) return;
-
-            // [TODO] 마스크 기반 충돌 처리 필요 (TunnelSegment 삭제됨)
-            // 현재 마스크 방식에서는 Collider 기반 충돌이 발생하지 않음.
-        }
-
         /// <summary>사망 처리 (IDigger 구현).</summary>
         public void Die()
         {
+            if (_isDead) return;
+
+            NetworkIdentity networkIdentity = GetComponent<NetworkIdentity>();
+            if (networkIdentity != null)
+            {
+                // 네트워크 엔티티는 서버에서만 파괴한다.
+                if (!NetworkServer.active) return;
+
+                _isDead = true;
+                CurrentSpeed = 0f;
+                NetworkServer.Destroy(gameObject);
+                return;
+            }
+
             _isDead = true;
             CurrentSpeed = 0f;
 

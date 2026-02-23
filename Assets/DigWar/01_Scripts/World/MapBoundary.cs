@@ -14,6 +14,7 @@ namespace World
         private GameSettings _settings;
         private Transform _playerTransform;
         private float _warningAlpha;
+        private float _nextPlayerLookupAt;
 
         private void Start()
         {
@@ -31,11 +32,9 @@ namespace World
         {
             if (!GameManager.Instance.IsGameActive) return;
 
-            if (_playerTransform == null)
+            if (_playerTransform == null || !_playerTransform.gameObject.activeInHierarchy)
             {
-                var player = FindObjectOfType<Player.PlayerController>();
-                if (player != null) _playerTransform = player.transform;
-                else return;
+                if (!TryResolveLocalPlayerTransform()) return;
             }
 
             float distance = _playerTransform.position.magnitude; // 원점 기준
@@ -68,6 +67,37 @@ namespace World
             // 화면 가장자리에 빨간 비네트 경고
             Color c = new Color(1f, 0f, 0f, _warningAlpha);
             DrawScreenBorder(c, 40f);
+        }
+
+        private bool TryResolveLocalPlayerTransform()
+        {
+            // 네트워크 모드: 로컬 NetworkPlayer 우선 추적
+            Network.NetworkPlayer localNetworkPlayer = Network.NetworkPlayer.LocalPlayer;
+            if (localNetworkPlayer != null)
+            {
+                _playerTransform = localNetworkPlayer.transform;
+                return true;
+            }
+
+            // 싱글플레이 폴백: 일반 PlayerController 추적
+            Player.PlayerController localController = Player.PlayerController.LocalController;
+            if (localController != null)
+            {
+                _playerTransform = localController.transform;
+                return true;
+            }
+
+            if (Time.unscaledTime < _nextPlayerLookupAt) return false;
+            _nextPlayerLookupAt = Time.unscaledTime + 1f;
+
+            var player = FindObjectOfType<Player.PlayerController>();
+            if (player == null) return false;
+
+            var netPlayer = player.GetComponent<Network.NetworkPlayer>();
+            if (netPlayer != null && !netPlayer.isLocalPlayer) return false;
+
+            _playerTransform = player.transform;
+            return true;
         }
 
         /// <summary>

@@ -79,9 +79,46 @@ namespace Systems
         private void Restart()
         {
             _isGameOver = false;
-            UnityEngine.SceneManagement.SceneManager.LoadScene(
-                UnityEngine.SceneManagement.SceneManager.GetActiveScene().buildIndex
-            );
+
+            // 패널 숨기기
+            if (_panel != null)
+                _panel.SetActive(false);
+
+            // 로컬 플레이어의 Respawn 호출 (씬 리로드 X)
+            if (TryRespawnLocalNetworkPlayer()) return;
+            if (TryRespawnLocalSinglePlayer()) return;
+            Debug.LogWarning("[GameOverUI] Restart requested but no local player was found.");
+
+        }
+
+        private bool TryRespawnLocalNetworkPlayer()
+        {
+            Network.NetworkPlayer localNetworkPlayer = Network.NetworkPlayer.LocalPlayer;
+            if (localNetworkPlayer == null) return false;
+
+            var pc = localNetworkPlayer.GetComponent<Player.PlayerController>();
+            if (pc == null) return false;
+
+            pc.Respawn();
+            if (Network.NetworkPlayer.CanSendCommands)
+                localNetworkPlayer.CmdRespawn();
+            else
+                Debug.LogWarning("[GameOverUI] CmdRespawn skipped: client not connected.");
+            return true;
+        }
+
+        private bool TryRespawnLocalSinglePlayer()
+        {
+            Player.PlayerController player = Player.PlayerController.LocalController;
+            if (player == null)
+                player = FindObjectOfType<Player.PlayerController>();
+            if (player == null) return false;
+
+            var netPlayer = player.GetComponent<Network.NetworkPlayer>();
+            if (netPlayer != null && !netPlayer.isLocalPlayer) return false;
+
+            player.Respawn();
+            return true;
         }
     }
 }

@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using Core;
 using Core.Data;
 
@@ -10,17 +10,17 @@ namespace World
     /// </summary>
     public class MapManager : MonoBehaviour
     {
-        [Header("지형")]
+        [Header("Ground")]
         [Tooltip("흙 타일 스프라이트 배열 (랜덤 선택)")]
         [SerializeField] private Sprite[] _groundSprites;
         [Tooltip("타일 1칸의 월드 크기")]
         [SerializeField] private float _tileSize = 2f;
-        [Tooltip("타일 회전 랜덤화")]
+        [Tooltip("Randomize tile rotation")]
         [SerializeField] private bool _randomRotation = true;
         [Tooltip("맵 바깥쪽으로 타일을 얼마나 더 깔 것인가 (비율)")]
         [SerializeField] private float _paddingRatio = 1.5f;
 
-        [Header("경계선")]
+        [Header("Boundary")]
         [SerializeField] private Color _boundaryColor = new Color(1f, 0.2f, 0.2f, 0.8f);
         [SerializeField] private float _boundaryWidth = 1.0f; // 경계선 두께 증가
         [SerializeField] private Color _outsideZoneColor = new Color(0.2f, 0.05f, 0.05f, 1f); // 어두운 붉은색 배경
@@ -140,7 +140,9 @@ namespace World
             _boundaryLine.endWidth = _boundaryWidth;
 
             _boundaryLine.material = new Material(
-                Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default"));
+        Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default")
+        ?? Shader.Find("Sprites/Default")
+        ?? Shader.Find("UI/Default"));
             _boundaryLine.startColor = _boundaryColor;
             _boundaryLine.endColor = _boundaryColor;
 
@@ -213,7 +215,10 @@ namespace World
             mf.mesh = mesh;
 
             var mr = overlayObj.AddComponent<MeshRenderer>();
-            mr.material = new Material(Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default"));
+            mr.material = new Material(
+        Shader.Find("Universal Render Pipeline/2D/Sprite-Unlit-Default")
+        ?? Shader.Find("Sprites/Default")
+        ?? Shader.Find("UI/Default"));
             mr.material.color = _outsideZoneColor; // 반투명 색상 적용
             mr.sortingOrder = 1; // 타일(-10)보다 위
         }

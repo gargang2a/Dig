@@ -1,114 +1,186 @@
-using UnityEngine;
+﻿using UnityEngine;
+using Mirror;
 using Core;
 using Core.Data;
 
 namespace Player
 {
     /// <summary>
-    /// AI 봇을 맵에 스폰한다.
-    /// 플레이어 프리팹과 동일한 구조의 오브젝트를 런타임 생성하되,
-    /// PlayerController 대신 AIController를 부착한다.
+    /// AI 봇을 서버에서 스폰하고 Mirror Spawn Handler를 통해
+    /// 모든 클라이언트에 동기화한다.
+    ///
+    /// [동작 방식]
+    /// 1. Awake: 스폰 핸들러 등록 (서버/클라이언트 공통)
+    /// 2. Start (서버만): 봇 생성 → NetworkServer.Spawn(bot, assetId)
+    /// 3. 클라이언트: 스폰 핸들러가 같은 구조의 봇을 재조립
+    /// 4. NetworkBot.OnStartClient: SyncVar로 색상/이름 적용, AI 비활성화
+    /// 5. NetworkTransform: 서버 AI의 이동을 클라이언트에 동기화
     /// </summary>
     public class BotSpawner : MonoBehaviour
     {
         [Header("봇 설정")]
-        [Tooltip("맵에 유지할 봇 수")]
+        [Tooltip("Number of bots to spawn")]
         [SerializeField] private int _botCount = 3;
 
-        [Tooltip("봇 스프라이트 (플레이어와 다른 색상 권장)")]
+        [Tooltip("Bot sprite")]
         [SerializeField] private Sprite _botSprite;
-
-        [Tooltip("봇 터널 머테리얼")]
-        [SerializeField] private Material _tunnelMaterial;
 
         private GameSettings _settings;
 
-        // 봇 색상 팔레트
-        private static readonly Color[] BOT_COLORS = new Color[]
+        // 봇 전용 assetId (Mirror가 스폰 핸들러를 식별하는 키)
+        private const uint BOT_ASSET_ID = 10001;
+
+        private void Awake()
         {
-            new Color(0.2f, 0.8f, 0.4f),  // 초록
-            new Color(0.8f, 0.3f, 0.3f),  // 빨강
-            new Color(0.3f, 0.5f, 0.9f),  // 파랑
-            new Color(0.9f, 0.7f, 0.1f),  // 노랑
-            new Color(0.7f, 0.3f, 0.9f),  // 보라
-            new Color(0.9f, 0.5f, 0.2f),  // 주황
-        };
+            // 서버와 클라이언트 모두에서 스폰 핸들러 등록
+            NetworkClient.RegisterSpawnHandler(
+                BOT_ASSET_ID,
+                OnClientSpawnBot,
+                OnClientUnSpawnBot
+            );
+        }
+
+        private void OnDestroy()
+        {
+            NetworkClient.UnregisterSpawnHandler(BOT_ASSET_ID);
+        }
 
         private void Start()
         {
+            // 서버가 아니면 봇 생성하지 않음
+            if (!NetworkServer.active)
+            {
+                Debug.Log("[BotSpawner] Client mode: waiting for server-spawned bots.");
+                return;
+            }
+
             if (GameManager.Instance == null) return;
             _settings = GameManager.Instance.Settings;
 
             for (int i = 0; i < _botCount; i++)
                 SpawnBot(i);
+
+            Debug.Log($"[BotSpawner] 서버에서 봇 {_botCount}마리 네트워크 스폰 완료");
         }
 
+        /// <summary>서버에서 봇을 조립하고 네트워크 스폰한다.</summary>
         private void SpawnBot(int index)
         {
-            // 맵 내 랜덤 위치
-            float radius = _settings.MapRadius * 0.7f;
+            var botObj = AssembleBot(index, enableAI: true);
+
+            // NetworkBot의 SyncVar 설정 (스폰 전에!)
+            var networkBot = botObj.GetComponent<Network.NetworkBot>();
+            networkBot.BotIndex = index;
+
+            // 네트워크 스폰 → 클라이언트에 전파
+            NetworkServer.Spawn(botObj, BOT_ASSET_ID);
+
+            // 스폰 후 활성화 (NetworkTransformReliable NullRef 방지)
+            botObj.SetActive(true);
+        }
+
+        /// <summary>봇 GameObject를 조립한다.</summary>
+        private GameObject AssembleBot(int index, bool enableAI)
+        {
+            float radius = _settings != null ? _settings.MapRadius * 0.7f : 20f;
             Vector2 randomPos = Random.insideUnitCircle * radius;
 
-            // 봇 오브젝트 생성
             var botObj = new GameObject($"Bot_{index}");
+            botObj.SetActive(false); // 조립 중 비활성 → NetworkBehaviour.Update() 방지
             botObj.transform.position = new Vector3(randomPos.x, randomPos.y, 0f);
             botObj.transform.rotation = Quaternion.Euler(0f, 0f, Random.Range(0f, 360f));
-            botObj.transform.localScale = Vector3.one * _settings.MinScale;
+            botObj.transform.localScale = Vector3.one * (_settings != null ? _settings.MinScale : 0.5f);
             botObj.layer = gameObject.layer;
 
-            // Rigidbody2D (AIController/TunnelGenerator 요구)
+            // Network 컴포넌트
+            botObj.AddComponent<NetworkIdentity>();
+            var nt = botObj.AddComponent<NetworkTransformReliable>();
+            nt.syncDirection = SyncDirection.ServerToClient;
+            nt.useFixedUpdate = true;
+            nt.onlySyncOnChange = false;
+            nt.positionPrecision = 0.005f;
+            nt.rotationSensitivity = 0.002f;
+            botObj.AddComponent<Network.NetworkBot>();
+
+            // Physics
             var rb = botObj.AddComponent<Rigidbody2D>();
             rb.bodyType = RigidbodyType2D.Kinematic;
-
-            // 충돌 감지용 콜라이더
+            rb.interpolation = RigidbodyInterpolation2D.Interpolate;
             var col = botObj.AddComponent<CircleCollider2D>();
             col.radius = 0.3f;
             col.isTrigger = true;
 
-            // 비주얼
+            // Visuals
             var visualObj = new GameObject("Visuals");
             visualObj.transform.SetParent(botObj.transform, false);
-
             var sr = visualObj.AddComponent<SpriteRenderer>();
-            Color botColor = BOT_COLORS[index % BOT_COLORS.Length];
-
-            if (_botSprite != null)
-            {
-                sr.sprite = _botSprite;
-            }
-            else
-            {
-                // 기본 원형 스프라이트
-                var playerSr = FindObjectOfType<PlayerController>()
-                    ?.GetComponentInChildren<SpriteRenderer>();
-                if (playerSr != null)
-                    sr.sprite = playerSr.sprite;
-            }
-
-            sr.color = botColor;
+            if (_botSprite != null) sr.sprite = _botSprite;
+            sr.color = Network.NetworkBot.BOT_COLORS[index % Network.NetworkBot.BOT_COLORS.Length];
             sr.sortingOrder = 1;
 
-            // AI 컨트롤러
-            botObj.AddComponent<AIController>();
-
-            // 성장 컴포넌트 (점수 기반 크기 조절)
-            botObj.AddComponent<Core.MoleGrowth>();
-
-            // 먼지 파티클
+            // Gameplay
+            var ai = botObj.AddComponent<AIController>();
+            ai.enabled = enableAI;
+            botObj.AddComponent<MoleGrowth>();
             botObj.AddComponent<DiggingParticle>();
+            botObj.AddComponent<Tunnel.TunnelGenerator>();
 
-            // 터널 생성기
-            var tunnel = botObj.AddComponent<Tunnel.TunnelGenerator>();
+            return botObj;
+        }
 
-            // 봇별 터널 색상: 채도를 낮춰 흙 느낌으로
-            // 봇별 터널 색상: Mask System v1에서는 단일 텍스처(R8)만 사용하므로 색상 구분 미지원.
-            // 추후 RGBA 마스크 등으로 확장 시 재구현 필요.
-            /*
-            Color tunnelColor = botColor * 0.6f;
-            tunnelColor = Color.Lerp(tunnelColor, new Color(0.45f, 0.3f, 0.18f), 0.5f); // 흙색 혼합
-            tunnelColor.a = 1f;
-            tunnel.SetTunnelVisuals(_tunnelMaterial, tunnelColor);
-            */
+        // ===== 스폰 핸들러 (클라이언트에서 호출) =====
+
+        /// <summary>
+        /// 클라이언트가 서버의 봇 스폰 메시지를 받으면 호출.
+        /// 서버와 동일한 컴포넌트 구조를 가진 GameObject를 생성한다.
+        /// </summary>
+        private GameObject OnClientSpawnBot(SpawnMessage msg)
+        {
+            var botObj = new GameObject("Bot_Network");
+            botObj.SetActive(false); // Mirror가 초기화 후 자동 활성화함
+            botObj.transform.position = msg.position;
+            botObj.transform.rotation = msg.rotation;
+            botObj.transform.localScale = msg.scale;
+            botObj.layer = gameObject.layer;
+
+            // Network 컴포넌트
+            botObj.AddComponent<NetworkIdentity>();
+            var nt = botObj.AddComponent<NetworkTransformReliable>();
+            nt.syncDirection = SyncDirection.ServerToClient;
+            nt.useFixedUpdate = true;
+            nt.onlySyncOnChange = false;
+            nt.positionPrecision = 0.005f;
+            nt.rotationSensitivity = 0.002f;
+            botObj.AddComponent<Network.NetworkBot>(); // SyncVar가 적용되면 비주얼 설정됨
+
+            // Physics
+            var rb = botObj.AddComponent<Rigidbody2D>();
+            rb.bodyType = RigidbodyType2D.Kinematic;
+            rb.interpolation = RigidbodyInterpolation2D.Interpolate;
+            var col = botObj.AddComponent<CircleCollider2D>();
+            col.radius = 0.3f;
+            col.isTrigger = true;
+
+            // Visuals (색상은 NetworkBot SyncVar 훅에서 설정됨)
+            var visualObj = new GameObject("Visuals");
+            visualObj.transform.SetParent(botObj.transform, false);
+            var sr = visualObj.AddComponent<SpriteRenderer>();
+            if (_botSprite != null) sr.sprite = _botSprite;
+            sr.sortingOrder = 1;
+
+            // Gameplay — AI는 클라이언트에서 비활성화 (NetworkBot.OnStartClient가 처리)
+            var ai = botObj.AddComponent<AIController>();
+            ai.enabled = false; // 서버가 NetworkTransform으로 위치 동기화
+            botObj.AddComponent<MoleGrowth>();
+            botObj.AddComponent<DiggingParticle>();
+            botObj.AddComponent<Tunnel.TunnelGenerator>();
+
+            return botObj;
+        }
+
+        private void OnClientUnSpawnBot(GameObject obj)
+        {
+            Destroy(obj);
         }
     }
 }

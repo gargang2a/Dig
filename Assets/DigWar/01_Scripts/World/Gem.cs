@@ -1,5 +1,7 @@
 using UnityEngine;
+using Mirror;
 using Core;
+using System.Collections.Generic;
 
 namespace World
 {
@@ -11,12 +13,17 @@ namespace World
     [RequireComponent(typeof(CircleCollider2D))]
     public class Gem : MonoBehaviour, IPoolable
     {
+        private static readonly HashSet<Gem> _activeGems = new HashSet<Gem>();
+        public static IReadOnlyCollection<Gem> ActiveGems => _activeGems;
+
         private CircleCollider2D _collider;
         private SpriteRenderer _sr;
         private MaterialPropertyBlock _mpb;
         private GameObject _originPrefab;
         private GemSpawner _spawner;
         private Transform _playerTransform;
+        private bool _isNetworkManaged;
+        private float _nextPlayerLookupAt;
 
         // Wobble (유휴 흔들림)
         private Vector3 _spawnPosition;
@@ -56,25 +63,35 @@ namespace World
             _mpb = new MaterialPropertyBlock();
         }
 
+        private void OnEnable()
+        {
+            _activeGems.Add(this);
+        }
+
+        private void OnDisable()
+        {
+            _activeGems.Remove(this);
+        }
+
         public void Initialize(GameObject prefab)
         {
             _originPrefab = prefab;
+        }
+
+        public void ConfigureNetworkMode(bool isNetworkManaged, GemSpawner spawner)
+        {
+            _isNetworkManaged = isNetworkManaged;
+            _spawner = spawner;
+
+            if (_isNetworkManaged)
+                InitializeVisualState(useDeterministicColor: true);
         }
 
         public void OnSpawn()
         {
             if (_collider != null)
                 _collider.enabled = true;
-
-            _spawnPosition = transform.position;
-            _wobbleOffset = Random.Range(0f, Mathf.PI * 2f);
-            _glowOffset = Random.Range(0f, Mathf.PI * 2f);
-            _isMagnetized = false;
-            _magnetSpeed = 0f;
-
-            // 랜덤 색상 적용
-            _baseColor = GEM_COLORS[Random.Range(0, GEM_COLORS.Length)];
-            ApplyHDRColor(_baseColor);
+            InitializeVisualState(useDeterministicColor: false);
 
             // 프리팹 스케일 기준으로 팝 애니메이션
             if (_targetScale <= 0f)
@@ -91,8 +108,46 @@ namespace World
             _isMagnetized = false;
         }
 
+        private void InitializeVisualState(bool useDeterministicColor)
+        {
+            _spawnPosition = transform.position;
+            _wobbleOffset = Random.Range(0f, Mathf.PI * 2f);
+            _glowOffset = Random.Range(0f, Mathf.PI * 2f);
+            _isMagnetized = false;
+            _magnetSpeed = 0f;
+
+            if (useDeterministicColor)
+            {
+                int index = GetDeterministicColorIndex(transform.position);
+                _baseColor = GEM_COLORS[index];
+            }
+            else
+            {
+                _baseColor = GEM_COLORS[Random.Range(0, GEM_COLORS.Length)];
+            }
+
+            ApplyHDRColor(_baseColor);
+        }
+
+        private static int GetDeterministicColorIndex(Vector3 position)
+        {
+            int x = Mathf.RoundToInt(position.x * 100f);
+            int y = Mathf.RoundToInt(position.y * 100f);
+            int hash = (x * 73856093) ^ (y * 19349663);
+            if (hash < 0) hash = -hash;
+            return hash % GEM_COLORS.Length;
+        }
+
         private void Update()
         {
+            if (_isNetworkManaged)
+            {
+                // 네트워크 젬은 서버 판정 기반으로만 수집 처리한다.
+                // 클라이언트는 위치를 변경하지 않고 발광만 표시한다.
+                UpdateGlow();
+                return;
+            }
+
             if (_isMagnetized)
             {
                 UpdateMagnet();
@@ -161,9 +216,20 @@ namespace World
         {
             if (_playerTransform == null)
             {
-                var player = FindObjectOfType<Player.PlayerController>();
-                if (player != null) _playerTransform = player.transform;
-                else return;
+                Player.PlayerController localController = Player.PlayerController.LocalController;
+                if (localController != null)
+                {
+                    _playerTransform = localController.transform;
+                }
+                else
+                {
+                    if (Time.unscaledTime < _nextPlayerLookupAt) return;
+                    _nextPlayerLookupAt = Time.unscaledTime + 1f;
+
+                    var player = FindObjectOfType<Player.PlayerController>();
+                    if (player != null) _playerTransform = player.transform;
+                    else return;
+                }
             }
 
             float magnetRadius = GameManager.Instance != null
@@ -192,35 +258,54 @@ namespace World
 
         private void OnTriggerEnter2D(Collider2D other)
         {
-            // IDigger 인터페이스를 통한 통합 처리 (Player & AI)
-            var digger = other.GetComponent<Player.IDigger>();
-            if (digger != null)
+            float score = GameManager.Instance != null
+                ? GameManager.Instance.Settings.GemScore
+                : 10f;
+
+            if (_isNetworkManaged)
             {
-                float score = GameManager.Instance != null 
-                    ? GameManager.Instance.Settings.GemScore 
-                    : 10f;
-                
-                digger.AddScore(score);
-                
-                // 플레이어 여부 확인 (사운드용)
-                bool isPlayer = other.GetComponent<Player.PlayerController>() != null;
-                Collect(isPlayer);
+                // 네트워크 모드: 서버에서만 수집 판정 및 점수 확정
+                if (!NetworkServer.active) return;
+
+                var netPlayer = other.GetComponent<Network.NetworkPlayer>();
+                if (netPlayer != null)
+                {
+                    netPlayer.ServerAddScore(score);
+                    Collect(isPlayer: true);
+                    return;
+                }
             }
+
+            // 로컬 모드(싱글) 또는 네트워크 서버의 AI 수집 처리
+            var digger = other.GetComponent<Player.IDigger>();
+            if (digger == null) return;
+
+            digger.AddScore(score);
+
+            bool isPlayerCollector = other.GetComponent<Player.PlayerController>() != null;
+            Collect(isPlayerCollector);
         }
 
         private void Collect(bool isPlayer = true)
         {
             // 플레이어일 경우 사운드 재생 (점수는 IDigger.AddScore에서 처리됨)
-            if (isPlayer)
+            if (isPlayer && !_isNetworkManaged)
             {
                 if (Systems.SoundManager.Instance != null)
                     Systems.SoundManager.Instance.PlayGemCollect();
             }
 
             if (_spawner == null)
-                _spawner = FindObjectOfType<GemSpawner>();
+                _spawner = GemSpawner.Instance != null ? GemSpawner.Instance : FindObjectOfType<GemSpawner>();
             if (_spawner != null)
                 _spawner.NotifyGemCollected();
+
+            if (_isNetworkManaged)
+            {
+                if (NetworkServer.active)
+                    NetworkServer.Destroy(gameObject);
+                return;
+            }
 
             if (ObjectPoolManager.Instance != null && _originPrefab != null)
                 ObjectPoolManager.Instance.Despawn(_originPrefab, gameObject);

@@ -109,6 +109,7 @@ namespace Tunnel
 
             _mapSize = _mapRadius * 2f;
             _mapOffset = -_mapRadius;
+
         }
 
         public void ClearMask()
@@ -117,6 +118,7 @@ namespace Tunnel
             RenderTexture.active = _maskTexture;
             GL.Clear(false, true, Color.black);
             RenderTexture.active = prev;
+
         }
 
         private void UpdateShaderGlobals()
