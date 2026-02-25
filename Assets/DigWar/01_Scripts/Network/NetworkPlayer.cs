@@ -89,6 +89,14 @@ namespace Network
             base.OnStartServer();
             _nextKillRequestAllowedAt = 0f;
             _syncedScale = ResolveScaleFromScore(Score);
+            _lastServerPosition = transform.position;
+            _lastServerPositionSampleAt = Time.time;
+            _serverSpeedEstimate = 0f;
+            _killRejectSummaryNextLogAt = Time.time + KILL_REJECT_SUMMARY_INTERVAL_SECONDS;
+            _killRejectAssaultCount = 0;
+            _killRejectCooldownCount = 0;
+            _killRejectDistanceCount = 0;
+            _lastKillRejectDetail = string.Empty;
 
             if (!_killDistanceConfigLogged)
             {
@@ -98,7 +106,20 @@ namespace Network
                     $"botFailSafeBonus={BOT_KILL_FAILSAFE_BONUS:F2}, " +
                     $"playerFailSafeBonus={PLAYER_KILL_FAILSAFE_BONUS:F2}, " +
                     $"botFailSafeMax={MAX_BOT_KILL_FAILSAFE_DISTANCE:F2}, " +
-                    $"playerFailSafeMax={MAX_PLAYER_KILL_FAILSAFE_DISTANCE:F2}");
+                    $"playerFailSafeMax={MAX_PLAYER_KILL_FAILSAFE_DISTANCE:F2}, " +
+                    $"driftBase={CLIENT_REPORTED_DRIFT_BASE:F2}, " +
+                    $"driftRttFactor={CLIENT_REPORTED_DRIFT_RTT_FACTOR:F2}, " +
+                    $"driftSpeedFactor={CLIENT_REPORTED_DRIFT_SPEED_FACTOR:F2}, " +
+                    $"driftSpeedCapBot={CLIENT_REPORTED_DRIFT_SPEED_CAP_BOT:F2}, " +
+                    $"driftSpeedCapPlayer={CLIENT_REPORTED_DRIFT_SPEED_CAP_PLAYER:F2}, " +
+                    $"driftMaxBot={CLIENT_REPORTED_DRIFT_MAX_BOT:F2}, " +
+                    $"driftMaxPlayer={CLIENT_REPORTED_DRIFT_MAX_PLAYER:F2}, " +
+                    $"driftGraceBot={CLIENT_REPORTED_DRIFT_GRACE_BOT:F2}, " +
+                    $"driftGracePlayer={CLIENT_REPORTED_DRIFT_GRACE_PLAYER:F2}, " +
+                    $"reportedCompBot={CLIENT_REPORTED_DISTANCE_COMPENSATION_BOT:F2}, " +
+                    $"reportedCompPlayer={CLIENT_REPORTED_DISTANCE_COMPENSATION_PLAYER:F2}, " +
+                    $"reportedMaxBot={MAX_CLIENT_REPORTED_BOT_KILL_DISTANCE:F2}, " +
+                    $"reportedMaxPlayer={MAX_CLIENT_REPORTED_PLAYER_KILL_DISTANCE:F2}");
             }
         }
 
@@ -135,7 +156,11 @@ namespace Network
 
         private void Update()
         {
-            if (!isLocalPlayer) return;
+            if (!isLocalPlayer)
+            {
+                TickRemoteRespawnFallback();
+                return;
+            }
 
             if (_playerController == null)
                 _playerController = GetComponent<Player.PlayerController>();
@@ -172,6 +197,52 @@ namespace Network
             }
         }
 
+        private void TickRemoteRespawnFallback()
+        {
+            if (_remoteRespawnFallbackAt < 0f)
+                return;
+
+            if (Time.unscaledTime < _remoteRespawnFallbackAt)
+                return;
+
+            _remoteRespawnFallbackAt = -1f;
+
+            if (_playerController == null)
+                _playerController = GetComponent<Player.PlayerController>();
+            if (_playerController == null)
+                return;
+
+            // FIX-042: RpcApplyRespawnState 지연/누락 대비용 지연 fallback.
+            // SyncVar(IsDead=false) 직후 즉시 리스폰하지 않고 짧게 대기해
+            // 서버 좌표 동기화가 먼저 반영될 여유를 준다.
+            _playerController.RemoteRespawn(transform.position);
+            ApplyRemoteScale(_syncedScale > 0f ? _syncedScale : ResolveScaleFromScore(Score));
+        }
+
+        [ServerCallback]
+        private void LateUpdate()
+        {
+            float now = Time.time;
+            if (_lastServerPositionSampleAt <= 0f)
+            {
+                _lastServerPosition = transform.position;
+                _lastServerPositionSampleAt = now;
+                _serverSpeedEstimate = 0f;
+                return;
+            }
+
+            float deltaTime = now - _lastServerPositionSampleAt;
+            if (deltaTime <= 0.0001f) return;
+
+            Vector2 currentPosition = transform.position;
+            float instantSpeed = Vector2.Distance(currentPosition, _lastServerPosition) / deltaTime;
+            float clampedInstantSpeed = Mathf.Clamp(instantSpeed, 0f, MAX_SERVER_SPEED_ESTIMATE);
+            _serverSpeedEstimate = Mathf.Lerp(_serverSpeedEstimate, clampedInstantSpeed, 0.35f);
+            _lastServerPosition = currentPosition;
+            _lastServerPositionSampleAt = now;
+            FlushKillRejectSummaryIfDue(now);
+        }
+
         private void SyncAssaultState()
         {
             if (!CanSendCommands) return;
@@ -198,7 +269,16 @@ namespace Network
         private float _nextKillRequestAllowedAt;
         private float _lastAssaultActivatedAt;
         private float _autoRespawnReadyAt = -1f;
+        private float _remoteRespawnFallbackAt = -1f;
         private float _ignoreClientScoreSyncUntil;
+        private Vector2 _lastServerPosition;
+        private float _lastServerPositionSampleAt;
+        private float _serverSpeedEstimate;
+        private int _killRejectAssaultCount;
+        private int _killRejectCooldownCount;
+        private int _killRejectDistanceCount;
+        private float _killRejectSummaryNextLogAt;
+        private string _lastKillRejectDetail;
         private const float SCORE_SYNC_INTERVAL = 0.3f;
         private const float ASSAULT_SYNC_INTERVAL = 0.1f;
         private const float SCORE_SYNC_GUARD_SECONDS = 0.4f;
@@ -211,14 +291,30 @@ namespace Network
         private const float BOT_KILL_RANGE_BONUS = 0.25f;
         private const float PLAYER_KILL_RANGE_BONUS = 0.35f;
         private const float MAX_KILL_RANGE_BUFFER = 1.5f;
-        private const float BOT_KILL_FAILSAFE_BONUS = 3.2f;
+        private const float BOT_KILL_FAILSAFE_BONUS = 4.5f;
         private const float PLAYER_KILL_FAILSAFE_BONUS = 5.5f;
-        private const float MAX_BOT_KILL_FAILSAFE_DISTANCE = 5.2f;
+        private const float MAX_BOT_KILL_FAILSAFE_DISTANCE = 6.8f;
         private const float MAX_PLAYER_KILL_FAILSAFE_DISTANCE = 8.0f;
+        private const float CLIENT_REPORTED_DISTANCE_COMPENSATION_BOT = 1.35f;
+        private const float CLIENT_REPORTED_DISTANCE_COMPENSATION_PLAYER = 1.05f;
+        private const float MAX_CLIENT_REPORTED_BOT_KILL_DISTANCE = 7.8f;
+        private const float MAX_CLIENT_REPORTED_PLAYER_KILL_DISTANCE = 8.6f;
+        private const float CLIENT_REPORTED_DRIFT_BASE = 1.5f;
+        private const float CLIENT_REPORTED_DRIFT_RTT_FACTOR = 16f;
+        private const float CLIENT_REPORTED_DRIFT_SPEED_FACTOR = 0.45f;
+        private const float CLIENT_REPORTED_DRIFT_SPEED_CAP_BOT = 6.5f;
+        private const float CLIENT_REPORTED_DRIFT_SPEED_CAP_PLAYER = 5.0f;
+        private const float CLIENT_REPORTED_DRIFT_MAX_BOT = 9.5f;
+        private const float CLIENT_REPORTED_DRIFT_MAX_PLAYER = 7.5f;
+        private const float CLIENT_REPORTED_DRIFT_GRACE_BOT = 0.9f;
+        private const float CLIENT_REPORTED_DRIFT_GRACE_PLAYER = 0.6f;
+        private const float KILL_REJECT_SUMMARY_INTERVAL_SECONDS = 4.0f;
+        private const float MAX_SERVER_SPEED_ESTIMATE = 40f;
         private const float FALLBACK_COLLIDER_RADIUS = 0.3f;
         private const float BASE_COLLIDER_CONTACT_TOLERANCE = 0.1f;
         private const float PLAYER_CONTACT_TOLERANCE_BONUS = 0.1f;
         private const float AUTO_RESPAWN_DELAY_SECONDS = 1.0f;
+        private const float REMOTE_RESPAWN_FALLBACK_DELAY_SECONDS = 0.2f;
         private static bool _killDistanceConfigLogged;
 
         // ===== Commands (클라이언트 -> 서버) =====
@@ -281,6 +377,23 @@ namespace Network
         [Command]
         public void CmdRespawn()
         {
+            ServerApplyRespawnState((Vector2)transform.position);
+        }
+
+        [Command]
+        public void CmdRespawnWithReportedPosition(Vector2 reportedRespawnPosition)
+        {
+            Vector2 respawnPosition = ResolveServerValidatedRespawnPosition(reportedRespawnPosition);
+            ServerApplyRespawnState(respawnPosition);
+        }
+
+        [Server]
+        private void ServerApplyRespawnState(Vector2 respawnPosition)
+        {
+            // 서버 권한 기준으로 최종 리스폰 좌표를 확정한다.
+            Vector3 currentPosition = transform.position;
+            transform.position = new Vector3(respawnPosition.x, respawnPosition.y, currentPosition.z);
+
             IsDead = false;
             Score = 0f;
             _isAssaultActive = false;
@@ -288,8 +401,35 @@ namespace Network
             _lastAssaultActivatedAt = 0f;
             UpdateSyncedScaleFromScore();
             _ignoreClientScoreSyncUntil = Time.time + SCORE_SYNC_GUARD_SECONDS;
-            RpcApplyRespawnState();
+            RpcApplyRespawnState(respawnPosition);
             Debug.Log($"[Network] {PlayerName} 리스폰 (서버 SyncVar 리셋)");
+        }
+
+        [Server]
+        private Vector2 ResolveServerValidatedRespawnPosition(Vector2 reportedRespawnPosition)
+        {
+            float mapRadius = 15f;
+            if (Core.GameManager.Instance != null && Core.GameManager.Instance.Settings != null)
+                mapRadius = Core.GameManager.Instance.Settings.MapRadius * 0.5f;
+            mapRadius = Mathf.Max(1f, mapRadius);
+
+            if (!IsFiniteVector2(reportedRespawnPosition))
+                return UnityEngine.Random.insideUnitCircle * mapRadius;
+
+            float maxSqrRadius = mapRadius * mapRadius;
+            if (reportedRespawnPosition.sqrMagnitude > maxSqrRadius)
+                reportedRespawnPosition = reportedRespawnPosition.normalized * mapRadius;
+
+            return reportedRespawnPosition;
+        }
+
+        private static bool IsFiniteVector2(Vector2 value)
+        {
+            return
+                !float.IsNaN(value.x) &&
+                !float.IsInfinity(value.x) &&
+                !float.IsNaN(value.y) &&
+                !float.IsInfinity(value.y);
         }
 
         // ===== ClientRpc (서버 -> 모든 클라이언트) =====
@@ -308,9 +448,27 @@ namespace Network
         [Command]
         public void CmdRequestKill(NetworkIdentity target)
         {
+            Vector2 attackerReportedPos = transform.position;
+            Vector2 targetReportedPos = target != null
+                ? (Vector2)target.transform.position
+                : attackerReportedPos;
+
+            ServerProcessKillRequest(target, attackerReportedPos, targetReportedPos);
+        }
+
+        [Command]
+        public void CmdRequestKillWithReported(NetworkIdentity target, Vector2 attackerReportedPos, Vector2 targetReportedPos)
+        {
+            ServerProcessKillRequest(target, attackerReportedPos, targetReportedPos);
+        }
+
+        [Server]
+        private void ServerProcessKillRequest(NetworkIdentity target, Vector2 attackerReportedPos, Vector2 targetReportedPos)
+        {
             if (target == null) return;
             if (target == netIdentity) return;
             if (IsDead) return;
+            MarkAssaultIntentFromKillRequest();
 
             bool assaultReady =
                 _isAssaultActive ||
@@ -319,7 +477,9 @@ namespace Network
                 assaultReady = true;
             if (!assaultReady)
             {
-                Debug.LogWarning($"[PvP] Kill rejected: assault inactive ({ResolveDisplayName()})");
+                RecordKillReject(
+                    "assault",
+                    $"player={ResolveDisplayName()}, target={ResolveDisplayName(target)}");
                 return;
             }
 
@@ -327,9 +487,10 @@ namespace Network
             {
                 float remaining = Mathf.Max(0f, _nextKillRequestAllowedAt - Time.time);
                 int connectionId = connectionToClient != null ? connectionToClient.connectionId : -1;
-                Debug.LogWarning(
-                    $"[PvP] Kill rejected: cooldown ({ResolveDisplayName()}), " +
-                    $"remaining={remaining:F3}s, target={ResolveDisplayName(target)}, connId={connectionId}");
+                RecordKillReject(
+                    "cooldown",
+                    $"player={ResolveDisplayName()}, remaining={remaining:F3}s, " +
+                    $"target={ResolveDisplayName(target)}, connId={connectionId}");
                 return;
             }
 
@@ -343,11 +504,19 @@ namespace Network
                 bool inFailSafeKillRange = !inStrictKillRange &&
                                            !hasColliderContact &&
                                            IsWithinKillFailSafeRange(target);
-                if (!inStrictKillRange && !hasColliderContact && !inFailSafeKillRange)
+                bool inReportedCompensatedRange = !inStrictKillRange &&
+                                                  !hasColliderContact &&
+                                                  !inFailSafeKillRange &&
+                                                  IsWithinClientReportedKillRange(target, attackerReportedPos, targetReportedPos);
+                if (!inStrictKillRange &&
+                    !hasColliderContact &&
+                    !inFailSafeKillRange &&
+                    !inReportedCompensatedRange)
                 {
-                    Debug.LogWarning(
-                        $"[PvP] Kill rejected: distance ({ResolveDisplayName()} -> {ResolveDisplayName(target)}), " +
-                        $"{BuildKillDistanceDebugInfo(target)}");
+                    RecordKillReject(
+                        "distance",
+                        $"{ResolveDisplayName()} -> {ResolveDisplayName(target)} | " +
+                        $"{BuildKillDistanceDebugInfo(target, attackerReportedPos, targetReportedPos)}");
                     return;
                 }
 
@@ -368,11 +537,19 @@ namespace Network
                 bool inFailSafeKillRange = !inStrictKillRange &&
                                            !hasColliderContact &&
                                            IsWithinKillFailSafeRange(target);
-                if (!inStrictKillRange && !hasColliderContact && !inFailSafeKillRange)
+                bool inReportedCompensatedRange = !inStrictKillRange &&
+                                                  !hasColliderContact &&
+                                                  !inFailSafeKillRange &&
+                                                  IsWithinClientReportedKillRange(target, attackerReportedPos, targetReportedPos);
+                if (!inStrictKillRange &&
+                    !hasColliderContact &&
+                    !inFailSafeKillRange &&
+                    !inReportedCompensatedRange)
                 {
-                    Debug.LogWarning(
-                        $"[PvP] Kill rejected: distance ({ResolveDisplayName()} -> {ResolveDisplayName(target)}), " +
-                        $"{BuildKillDistanceDebugInfo(target)}");
+                    RecordKillReject(
+                        "distance",
+                        $"{ResolveDisplayName()} -> {ResolveDisplayName(target)} | " +
+                        $"{BuildKillDistanceDebugInfo(target, attackerReportedPos, targetReportedPos)}");
                     return;
                 }
 
@@ -413,11 +590,13 @@ namespace Network
         /// 서버 점수 확정 이벤트를 로컬 클라이언트 상태에 반영한다.
         /// </summary>
         [ClientRpc]
-        private void RpcApplyRespawnState()
+        private void RpcApplyRespawnState(Vector2 respawnPosition)
         {
+            _remoteRespawnFallbackAt = -1f;
+
             var pc = GetComponent<Player.PlayerController>();
             if (pc != null)
-                pc.RemoteRespawn();
+                pc.RemoteRespawn(respawnPosition);
 
             if (!isLocalPlayer)
                 ApplyRemoteScale(_syncedScale > 0f ? _syncedScale : ResolveScaleFromScore(Score));
@@ -449,15 +628,30 @@ namespace Network
             if (oldVal == true && newVal == false)
                 _autoRespawnReadyAt = -1f;
 
+            if (isLocalPlayer)
+                return;
+
+            if (_playerController == null)
+                _playerController = GetComponent<Player.PlayerController>();
+
+            if (_playerController == null)
+                return;
+
+            if (newVal)
+            {
+                // FIX-042: SyncVar 훅 fallback.
+                // RpcDie 타이밍이 늦어도 원격 객체는 즉시 죽음 상태(터널 중지)로 맞춘다.
+                _remoteRespawnFallbackAt = -1f;
+                _playerController.Die();
+                return;
+            }
+
             if (oldVal == true && newVal == false)
             {
-                // 사망 -> 리스폰 전이 시 원격 플레이어 비주얼만 복구한다.
-                if (!isLocalPlayer)
-                {
-                    var pc = GetComponent<Player.PlayerController>();
-                    if (pc != null) pc.RemoteRespawn();
-                    ApplyRemoteScale(_syncedScale > 0f ? _syncedScale : ResolveScaleFromScore(Score));
-                }
+                // FIX-042: SyncVar 훅 fallback.
+                // IsDead=false 도착 직후 즉시 리스폰하면 죽은 좌표 기반 직선 터널이 생길 수 있어
+                // 짧은 지연 후 fallback을 실행한다(RPC가 먼저 오면 자동 취소).
+                _remoteRespawnFallbackAt = Time.unscaledTime + REMOTE_RESPAWN_FALLBACK_DELAY_SECONDS;
             }
         }
 
@@ -487,7 +681,7 @@ namespace Network
             // 서버 반영까지 지연될 수 있으므로 재시도 간격을 유지한다.
             _autoRespawnReadyAt = Time.unscaledTime + AUTO_RESPAWN_DELAY_SECONDS;
             _playerController.Respawn();
-            CmdRespawn();
+            CmdRespawnWithReportedPosition(_playerController.transform.position);
         }
 
         private void OnSyncedScaleChanged(float oldScale, float newScale)
@@ -531,6 +725,83 @@ namespace Network
         }
 
         [Server]
+        private bool IsWithinClientReportedKillRange(NetworkIdentity target, Vector2 attackerReportedPos, Vector2 targetReportedPos)
+        {
+            if (target == null) return false;
+
+            float driftAllowance = ResolveReportedPositionDriftAllowance(target);
+            float driftGrace = ResolveReportedPositionDriftGrace(target);
+            float effectiveDriftAllowance = driftAllowance + driftGrace;
+            float attackerDrift = Vector2.Distance(attackerReportedPos, (Vector2)transform.position);
+            if (attackerDrift > effectiveDriftAllowance) return false;
+
+            float targetDrift = Vector2.Distance(targetReportedPos, (Vector2)target.transform.position);
+            if (targetDrift > effectiveDriftAllowance) return false;
+
+            float strictAllowedDistance = ResolveAllowedKillDistance(target);
+            float bonus = ResolveFailSafeBonus(target);
+            float maxDistance = ResolveClientReportedMaxDistance(target);
+            float compensation = ResolveClientReportedDistanceCompensation(target);
+            float failSafeAllowedDistance = Mathf.Min(
+                maxDistance,
+                strictAllowedDistance + bonus);
+            float compensatedAllowedDistance = Mathf.Min(
+                maxDistance,
+                failSafeAllowedDistance + compensation);
+
+            float reportedDistance = Vector2.Distance(attackerReportedPos, targetReportedPos);
+            return reportedDistance <= compensatedAllowedDistance;
+        }
+
+        [Server]
+        private float ResolveReportedPositionDriftAllowance(NetworkIdentity target)
+        {
+            float rttSeconds = connectionToClient != null ? Mathf.Max(0f, (float)connectionToClient.rtt) : 0f;
+            float rttAllowance = rttSeconds * CLIENT_REPORTED_DRIFT_RTT_FACTOR;
+
+            bool playerTarget = target != null && target.GetComponent<NetworkPlayer>() != null;
+            float speedCap = playerTarget
+                ? CLIENT_REPORTED_DRIFT_SPEED_CAP_PLAYER
+                : CLIENT_REPORTED_DRIFT_SPEED_CAP_BOT;
+            float driftMax = playerTarget
+                ? CLIENT_REPORTED_DRIFT_MAX_PLAYER
+                : CLIENT_REPORTED_DRIFT_MAX_BOT;
+            float speedAllowance = Mathf.Min(speedCap, _serverSpeedEstimate * CLIENT_REPORTED_DRIFT_SPEED_FACTOR);
+
+            return Mathf.Clamp(
+                CLIENT_REPORTED_DRIFT_BASE + rttAllowance + speedAllowance,
+                CLIENT_REPORTED_DRIFT_BASE,
+                driftMax);
+        }
+
+        [Server]
+        private static float ResolveReportedPositionDriftGrace(NetworkIdentity target)
+        {
+            if (target == null) return CLIENT_REPORTED_DRIFT_GRACE_BOT;
+            return target.GetComponent<NetworkPlayer>() != null
+                ? CLIENT_REPORTED_DRIFT_GRACE_PLAYER
+                : CLIENT_REPORTED_DRIFT_GRACE_BOT;
+        }
+
+        [Server]
+        private static float ResolveClientReportedDistanceCompensation(NetworkIdentity target)
+        {
+            if (target == null) return CLIENT_REPORTED_DISTANCE_COMPENSATION_BOT;
+            return target.GetComponent<NetworkPlayer>() != null
+                ? CLIENT_REPORTED_DISTANCE_COMPENSATION_PLAYER
+                : CLIENT_REPORTED_DISTANCE_COMPENSATION_BOT;
+        }
+
+        [Server]
+        private static float ResolveClientReportedMaxDistance(NetworkIdentity target)
+        {
+            if (target == null) return MAX_CLIENT_REPORTED_BOT_KILL_DISTANCE;
+            return target.GetComponent<NetworkPlayer>() != null
+                ? MAX_CLIENT_REPORTED_PLAYER_KILL_DISTANCE
+                : MAX_CLIENT_REPORTED_BOT_KILL_DISTANCE;
+        }
+
+        [Server]
         private float ResolveAllowedKillDistance(NetworkPlayer targetPlayer)
         {
             float killRangeBuffer = ResolveKillRangeBuffer(targetPlayer != null ? targetPlayer.netIdentity : null);
@@ -547,24 +818,38 @@ namespace Network
         }
 
         [Server]
-        private string BuildKillDistanceDebugInfo(NetworkIdentity target)
+        private string BuildKillDistanceDebugInfo(NetworkIdentity target, Vector2 attackerReportedPos, Vector2 targetReportedPos)
         {
             if (target == null) return "target=null";
 
             float strictAllowedDistance = ResolveAllowedKillDistance(target);
             float bonus = ResolveFailSafeBonus(target);
             float maxDistance = ResolveFailSafeMaxDistance(target);
+            float reportedMaxDistance = ResolveClientReportedMaxDistance(target);
+            float reportedCompensation = ResolveClientReportedDistanceCompensation(target);
             float failSafeAllowedDistance = Mathf.Min(
                 maxDistance,
                 strictAllowedDistance + bonus);
+            float compensatedAllowedDistance = Mathf.Min(
+                reportedMaxDistance,
+                failSafeAllowedDistance + reportedCompensation);
 
             float sqrDistance = (target.transform.position - transform.position).sqrMagnitude;
             float distance = Mathf.Sqrt(Mathf.Max(0f, sqrDistance));
             float rttMs = connectionToClient != null ? (float)connectionToClient.rtt * 1000f : 0f;
+            float reportedDistance = Vector2.Distance(attackerReportedPos, targetReportedPos);
+            float attackerDrift = Vector2.Distance(attackerReportedPos, (Vector2)transform.position);
+            float targetDrift = Vector2.Distance(targetReportedPos, (Vector2)target.transform.position);
+            float driftAllowance = ResolveReportedPositionDriftAllowance(target);
+            float driftGrace = ResolveReportedPositionDriftGrace(target);
+            float effectiveDriftAllowance = driftAllowance + driftGrace;
 
             return
                 $"dist={distance:F3}, strict={strictAllowedDistance:F3}, failSafe={failSafeAllowedDistance:F3}, " +
-                $"bonus={bonus:F3}, failSafeMax={maxDistance:F3}, " +
+                $"reportedDist={reportedDistance:F3}, compensated={compensatedAllowedDistance:F3}, " +
+                $"attackerDrift={attackerDrift:F3}, targetDrift={targetDrift:F3}, driftAllow={driftAllowance:F3}, " +
+                $"driftGrace={driftGrace:F3}, effectiveDriftAllow={effectiveDriftAllowance:F3}, " +
+                $"bonus={bonus:F3}, failSafeMax={maxDistance:F3}, reportedComp={reportedCompensation:F3}, reportedMax={reportedMaxDistance:F3}, " +
                 $"rttMs={rttMs:F1}, attackerPos={transform.position}, targetPos={target.transform.position}";
         }
 
@@ -625,6 +910,56 @@ namespace Network
 
             return Mathf.Min(MAX_KILL_RANGE_BUFFER, rangeBuffer);
         }
+
+        [Server]
+        private void MarkAssaultIntentFromKillRequest()
+        {
+            _lastAssaultActivatedAt = Time.time;
+        }
+
+        [Server]
+        private void RecordKillReject(string reason, string detail)
+        {
+            switch (reason)
+            {
+                case "assault":
+                    _killRejectAssaultCount++;
+                    break;
+                case "cooldown":
+                    _killRejectCooldownCount++;
+                    break;
+                default:
+                    _killRejectDistanceCount++;
+                    break;
+            }
+
+            _lastKillRejectDetail = detail;
+            FlushKillRejectSummaryIfDue(Time.time);
+        }
+
+        [Server]
+        private void FlushKillRejectSummaryIfDue(float now)
+        {
+            if (now < _killRejectSummaryNextLogAt) return;
+
+            int total = _killRejectAssaultCount + _killRejectCooldownCount + _killRejectDistanceCount;
+            if (total > 0)
+            {
+                string detail = string.IsNullOrWhiteSpace(_lastKillRejectDetail) ? "-" : _lastKillRejectDetail;
+                Debug.Log(
+                    $"[PvP][RejectSummary] player={ResolveDisplayName()}, total={total}, " +
+                    $"assault={_killRejectAssaultCount}, cooldown={_killRejectCooldownCount}, distance={_killRejectDistanceCount}, " +
+                    $"last={detail}");
+
+                _killRejectAssaultCount = 0;
+                _killRejectCooldownCount = 0;
+                _killRejectDistanceCount = 0;
+                _lastKillRejectDetail = string.Empty;
+            }
+
+            _killRejectSummaryNextLogAt = now + KILL_REJECT_SUMMARY_INTERVAL_SECONDS;
+        }
+
         [Server]
         private bool HasColliderContact(NetworkIdentity target)
         {

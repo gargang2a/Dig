@@ -1885,6 +1885,7 @@ MonoBehaviour:
   _boostLoopClip: {fileID: 8300000, guid: b177b771182eba449b3610c2bf68d2a4, type: 3}
   _masterVolume: 1
   _gemSoundCooldown: 0.05
+  _startMuted: 0
   _boostPitchBase: 1.4
   _jitterIntensity: 0.153
   _jitterFrequency: 2
@@ -3069,6 +3070,7 @@ MonoBehaviour:
   _playerDotSize: 8
   _botDotSize: 5
   _sandwormDotSize: 6
+  _verboseDebugLogs: 0
 --- !u!1 &627395830
 GameObject:
   m_ObjectHideFlags: 0
@@ -7110,10 +7112,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   maxMessageSize: 16384
   maxHandshakeSize: 16384
-  serverMaxMsgsPerTick: 10000
-  clientMaxMsgsPerTick: 1000
-  sendTimeout: 5000
-  receiveTimeout: 20000
+  serverMaxMsgsPerTick: 20000
+  clientMaxMsgsPerTick: 4000
+  sendTimeout: 12000
+  receiveTimeout: 60000
   noDelay: 1
   sslEnabled: 0
   sslProtocols: 3072
@@ -7159,15 +7161,15 @@ MonoBehaviour:
   exceptionsDisconnect: 1
   snapshotSettings:
     bufferTimeMultiplier: 4
-    bufferLimit: 32
-    catchupNegativeThreshold: -1
-    catchupPositiveThreshold: 1
-    catchupSpeed: 0.019999999552965164
-    slowdownSpeed: 0.03999999910593033
-    driftEmaDuration: 1
+    bufferLimit: 64
+    catchupNegativeThreshold: -1.5
+    catchupPositiveThreshold: 1.5
+    catchupSpeed: 0.015
+    slowdownSpeed: 0.03
+    driftEmaDuration: 2
     dynamicAdjustment: 1
     dynamicAdjustmentTolerance: 2
-    deliveryTimeEmaDuration: 2
+    deliveryTimeEmaDuration: 3
   evaluationMethod: 0
   evaluationInterval: 3
   timeInterpolationGui: 0

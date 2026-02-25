@@ -25,8 +25,10 @@ namespace World
         [SerializeField] private float _dirChangeInterval = 3f;
 
         [Header("Erasing (파기)")]
+#if UNITY_EDITOR
         [Tooltip("홀을 지우는 브러시 반경 (월드 유닛)")]
         [SerializeField] private float _eraseRadius = 3f;
+#endif
         [Tooltip("EraseHole 호출 최소 이동 거리")]
         [SerializeField] private float _eraseStepDistance = 0.3f;
 
@@ -75,9 +77,14 @@ namespace World
         private const int SORTING_ORDER_HEAD = 20;
         private const float HAZARD_KILL_RADIUS_SCALE = 0.45f;
         private const float HAZARD_CHECK_INTERVAL = 0.05f;
+        private const float CLIENT_HISTORY_RESYNC_DELTA_SECONDS = 0.2f;
+        private const float CLIENT_HISTORY_RESYNC_COOLDOWN_SECONDS = 0.6f;
+        private const float SEGMENT_DRIFT_RESYNC_MULTIPLIER = 2.6f;
+        private const float SEGMENT_SNAP_MULTIPLIER = 2.2f;
 
         private static bool IsNetworkMode => NetworkClient.active || NetworkServer.active;
         private float _hazardCheckTimer;
+        private float _clientHistoryResyncCooldownUntil;
 
         private void Start()
         {
@@ -155,17 +162,7 @@ namespace World
         /// </summary>
         private void InitializeHistory()
         {
-            _positionHistory.Clear();
-            Vector3 backDir = -transform.up;
-            int totalNeeded = _segmentCount * Mathf.CeilToInt(_segmentSpacing / HISTORY_STEP) + 10;
-
-            for (int i = 0; i < totalNeeded; i++)
-            {
-                _positionHistory.Add(transform.position + backDir * (i * HISTORY_STEP));
-            }
-
-            // 초기 위치로 세그먼트 배치 후 활성화
-            UpdateSegments();
+            RebuildHistory(snapSegments: true);
             for (int i = 0; i < _segments.Count; i++)
                 _segments[i].gameObject.SetActive(true);
         }
@@ -175,6 +172,9 @@ namespace World
             if (IsNetworkMode && !NetworkServer.active)
             {
                 // 클라이언트에서는 서버 동기화된 월드 위치만 따라간다.
+                if (ShouldForceClientHistoryResync() || ShouldForceResyncForSegmentDrift())
+                    RebuildHistory(snapSegments: true);
+
                 RecordHistory();
                 UpdateSegments();
                 TryErase(allowGemDrop: false);
@@ -188,6 +188,26 @@ namespace World
             UpdateSegments();
             TryErase(allowGemDrop: true);
             ServerTickHazardKills();
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            if (!hasFocus) return;
+            if (!IsNetworkMode || NetworkServer.active) return;
+
+            // WebGL/클라이언트가 포커스를 되찾는 시점에 히스토리를 즉시 정렬해
+            // 세그먼트 분리 잔상을 줄인다.
+            RebuildHistory(snapSegments: true);
+            _clientHistoryResyncCooldownUntil = Time.unscaledTime + CLIENT_HISTORY_RESYNC_COOLDOWN_SECONDS;
+        }
+
+        private void OnApplicationPause(bool pauseStatus)
+        {
+            if (pauseStatus) return;
+            if (!IsNetworkMode || NetworkServer.active) return;
+
+            RebuildHistory(snapSegments: true);
+            _clientHistoryResyncCooldownUntil = Time.unscaledTime + CLIENT_HISTORY_RESYNC_COOLDOWN_SECONDS;
         }
 
         // ===== AI (방향 전환 + 벽 회피) =====
@@ -228,8 +248,23 @@ namespace World
         /// </summary>
         private void RecordHistory()
         {
-            if (_positionHistory.Count == 0 ||
-                Vector3.Distance(transform.position, _positionHistory[0]) >= HISTORY_STEP)
+            if (_positionHistory.Count == 0)
+            {
+                RebuildHistory(snapSegments: true);
+                return;
+            }
+
+            Vector3 delta = transform.position - _positionHistory[0];
+            float teleportThreshold = ResolveHistoryTeleportThreshold();
+            if (delta.sqrMagnitude >= teleportThreshold * teleportThreshold)
+            {
+                // WebGL 탭 전환 복귀 직후처럼 머리 위치가 크게 점프하면
+                // 기존 히스토리를 버리고 즉시 재정렬해 세그먼트 분리를 방지한다.
+                RebuildHistory(snapSegments: true);
+                return;
+            }
+
+            if (delta.sqrMagnitude >= HISTORY_STEP * HISTORY_STEP)
             {
                 _positionHistory.Insert(0, transform.position);
 
@@ -239,28 +274,41 @@ namespace World
             }
         }
 
+        private bool ShouldForceClientHistoryResync()
+        {
+            if (Time.unscaledTime < _clientHistoryResyncCooldownUntil)
+                return false;
+
+            if (Time.unscaledDeltaTime < CLIENT_HISTORY_RESYNC_DELTA_SECONDS)
+                return false;
+
+            _clientHistoryResyncCooldownUntil = Time.unscaledTime + CLIENT_HISTORY_RESYNC_COOLDOWN_SECONDS;
+            return true;
+        }
+
         /// <summary>
         /// 각 세그먼트를 히스토리 곡선 위치에 부드럽게 배치한다.
         /// </summary>
         private void UpdateSegments()
         {
-            float smoothSpeed = 15f; // 보간 속도
+            const float smoothSpeed = 15f; // 보간 속도
+            float blend = Mathf.Clamp01(Time.deltaTime * smoothSpeed);
+            if (IsNetworkMode && !NetworkServer.active && Time.unscaledDeltaTime >= CLIENT_HISTORY_RESYNC_DELTA_SECONDS)
+                blend = 1f;
+
+            float snapDistance = ResolveSegmentSnapDistance();
+            float snapDistanceSqr = snapDistance * snapDistance;
 
             for (int i = 0; i < _segments.Count; i++)
             {
-                // 히스토리 인덱스를 실수로 계산해 샘플 사이를 보간
                 float floatIndex = (i + 1) * _segmentSpacing / HISTORY_STEP;
-                int indexA = Mathf.FloorToInt(floatIndex);
-                int indexB = indexA + 1;
-                indexA = Mathf.Clamp(indexA, 0, _positionHistory.Count - 1);
-                indexB = Mathf.Clamp(indexB, 0, _positionHistory.Count - 1);
+                Vector3 targetPos = ResolveHistoryPoint(floatIndex);
 
-                float frac = floatIndex - Mathf.Floor(floatIndex);
-                Vector3 targetPos = Vector3.Lerp(_positionHistory[indexA], _positionHistory[indexB], frac);
-
-                // 부드러운 위치 이동
-                _segments[i].position = Vector3.Lerp(
-                    _segments[i].position, targetPos, Time.deltaTime * smoothSpeed);
+                // ALT+TAB 복귀 직후처럼 오차가 크게 벌어졌으면 즉시 스냅해 분리를 줄인다.
+                if ((_segments[i].position - targetPos).sqrMagnitude >= snapDistanceSqr)
+                    _segments[i].position = targetPos;
+                else
+                    _segments[i].position = Vector3.Lerp(_segments[i].position, targetPos, blend);
 
                 // 이전 세그먼트(또는 머리) 방향으로 회전
                 Vector3 lookTarget = (i == 0) ? transform.position : _segments[i - 1].position;
@@ -270,7 +318,104 @@ namespace World
                     float angle = Mathf.Atan2(lookDir.y, lookDir.x) * Mathf.Rad2Deg - 90f;
                     Quaternion targetRot = Quaternion.Euler(0f, 0f, angle);
                     _segments[i].rotation = Quaternion.Lerp(
-                        _segments[i].rotation, targetRot, Time.deltaTime * smoothSpeed);
+                        _segments[i].rotation, targetRot, blend);
+                }
+            }
+        }
+
+        private bool ShouldForceResyncForSegmentDrift()
+        {
+            if (_segments.Count == 0 || _positionHistory.Count == 0)
+                return false;
+
+            float driftDistance = ResolveSegmentDriftResyncDistance();
+            float driftDistanceSqr = driftDistance * driftDistance;
+
+            // 머리-첫 세그먼트 링크가 깨지면 즉시 재정렬.
+            if ((_segments[0].position - transform.position).sqrMagnitude >= driftDistanceSqr)
+                return true;
+
+            for (int i = 1; i < _segments.Count; i++)
+            {
+                if ((_segments[i].position - _segments[i - 1].position).sqrMagnitude >= driftDistanceSqr)
+                    return true;
+            }
+
+            // 꼬리도 히스토리 곡선 근처에 있어야 한다.
+            float tailFloatIndex = _segments.Count * _segmentSpacing / HISTORY_STEP;
+            Vector3 tailExpected = ResolveHistoryPoint(tailFloatIndex);
+            float tailDistance = Mathf.Max(driftDistance, _segmentSpacing * 3f);
+            return (_segments[_segments.Count - 1].position - tailExpected).sqrMagnitude >= tailDistance * tailDistance;
+        }
+
+        private float ResolveSegmentDriftResyncDistance()
+        {
+            float bySpacing = Mathf.Max(_segmentSpacing, 0.1f) * SEGMENT_DRIFT_RESYNC_MULTIPLIER;
+            float byHead = Mathf.Max(_headScale, 0.1f) * 0.9f;
+            return Mathf.Max(bySpacing, byHead);
+        }
+
+        private float ResolveSegmentSnapDistance()
+        {
+            float bySpacing = Mathf.Max(_segmentSpacing, 0.1f) * SEGMENT_SNAP_MULTIPLIER;
+            float byHead = Mathf.Max(_headScale, 0.1f) * 0.8f;
+            return Mathf.Max(bySpacing, byHead);
+        }
+
+        private void RebuildHistory(bool snapSegments)
+        {
+            _positionHistory.Clear();
+
+            Vector3 backDir = -transform.up;
+            int totalNeeded = ResolveHistorySampleCount();
+            for (int i = 0; i < totalNeeded; i++)
+                _positionHistory.Add(transform.position + backDir * (i * HISTORY_STEP));
+
+            if (snapSegments)
+                SnapSegmentsToHistory();
+        }
+
+        private int ResolveHistorySampleCount()
+        {
+            int baseCount = _segmentCount * Mathf.CeilToInt(_segmentSpacing / HISTORY_STEP) + 10;
+            return Mathf.Max(64, baseCount);
+        }
+
+        private float ResolveHistoryTeleportThreshold()
+        {
+            float bodyLength = Mathf.Max(_segmentSpacing, _segmentCount * _segmentSpacing);
+            float byBody = bodyLength * 0.75f;
+            float byHead = _headScale * 2f;
+            return Mathf.Max(byBody, byHead);
+        }
+
+        private Vector3 ResolveHistoryPoint(float floatIndex)
+        {
+            if (_positionHistory.Count == 0)
+                return transform.position;
+
+            int indexA = Mathf.FloorToInt(floatIndex);
+            int indexB = indexA + 1;
+            indexA = Mathf.Clamp(indexA, 0, _positionHistory.Count - 1);
+            indexB = Mathf.Clamp(indexB, 0, _positionHistory.Count - 1);
+
+            float frac = floatIndex - Mathf.Floor(floatIndex);
+            return Vector3.Lerp(_positionHistory[indexA], _positionHistory[indexB], frac);
+        }
+
+        private void SnapSegmentsToHistory()
+        {
+            for (int i = 0; i < _segments.Count; i++)
+            {
+                float floatIndex = (i + 1) * _segmentSpacing / HISTORY_STEP;
+                _segments[i].position = ResolveHistoryPoint(floatIndex);
+
+                Vector3 lookTarget = (i == 0) ? transform.position : _segments[i - 1].position;
+                Vector3 lookDir = lookTarget - _segments[i].position;
+                if (lookDir.sqrMagnitude > 0.001f)
+                {
+                    float angle = Mathf.Atan2(lookDir.y, lookDir.x) * Mathf.Rad2Deg - 90f;
+                    _segments[i].rotation = Quaternion.Euler(0f, 0f, angle);
                 }
             }
         }

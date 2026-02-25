@@ -27,6 +27,7 @@ namespace Systems
         [Header("Settings")]
         [SerializeField, Range(0f, 1f)] private float _masterVolume = 1f;
         [SerializeField] private float _gemSoundCooldown = 0.05f; // 너무 잦은 재생 방지
+        [SerializeField] private bool _startMuted = false;
 
         [Header("Engine Sound Settings")]
         [SerializeField, Range(1f, 2f)] private float _boostPitchBase = 1.4f;
@@ -34,6 +35,7 @@ namespace Systems
         [SerializeField, Range(0.1f, 10f)] private float _jitterFrequency = 2.0f;
 
         private float _lastGemSoundTime;
+        private bool _isMuted;
 
         private void Awake()
         {
@@ -49,6 +51,9 @@ namespace Systems
             if (_bgmSource == null) _bgmSource = CreateAudioSource("BGMSource", true);
             if (_sfxSource == null) _sfxSource = CreateAudioSource("SFXSource", false);
             if (_engineSource == null) _engineSource = CreateAudioSource("EngineSource", true);
+
+            _isMuted = _startMuted;
+            ApplyMuteState();
         }
 
         private void Start()
@@ -74,6 +79,21 @@ namespace Systems
             _bgmSource.clip = clip;
             _bgmSource.volume = _masterVolume * 0.6f;
             _bgmSource.Play();
+        }
+
+        public bool IsMuted => _isMuted;
+
+        public void ToggleMute()
+        {
+            SetMuted(!_isMuted);
+        }
+
+        public void SetMuted(bool muted)
+        {
+            if (_isMuted == muted) return;
+            _isMuted = muted;
+            ApplyMuteState();
+            Debug.Log($"[SoundManager] Mute {(_isMuted ? "ON" : "OFF")}");
         }
 
         public void PlaySFX(AudioClip clip, float volumeScale = 1f)
@@ -153,6 +173,13 @@ namespace Systems
             {
                 _engineSource.Stop();
             }
+        }
+
+        private void ApplyMuteState()
+        {
+            if (_bgmSource != null) _bgmSource.mute = _isMuted;
+            if (_sfxSource != null) _sfxSource.mute = _isMuted;
+            if (_engineSource != null) _engineSource.mute = _isMuted;
         }
     }
 }

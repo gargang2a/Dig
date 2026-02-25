@@ -1,8 +1,10 @@
 ﻿using UnityEngine;
 using Mirror;
+using Mirror.SimpleWeb;
 using UnityEngine.Serialization;
 using System.Collections;
 using System;
+using System.Net;
 
 namespace Network
 {
@@ -35,6 +37,18 @@ namespace Network
         private const bool FREE_MVP_PLAYER_INTERPOLATE_ROTATION = true;
         private const float FREE_MVP_PLAYER_POSITION_PRECISION = 0.003f;
         private const float FREE_MVP_PLAYER_ROTATION_SENSITIVITY = 0.003f;
+        private const int FREE_MVP_SIMPLEWEB_SEND_TIMEOUT_MS = 12000;
+        private const int FREE_MVP_SIMPLEWEB_RECEIVE_TIMEOUT_MS = 60000;
+        private const int FREE_MVP_SIMPLEWEB_SERVER_MAX_MSGS_PER_TICK = 20000;
+        private const int FREE_MVP_SIMPLEWEB_CLIENT_MAX_MSGS_PER_TICK = 4000;
+        private const bool FREE_MVP_SIMPLEWEB_NO_DELAY = true;
+        private const string WEB_QUERY_SERVER_KEY = "server";
+        private const string WEB_QUERY_PORT_KEY = "port";
+        private const string WEB_QUERY_WSS_KEY = "wss";
+        private const string CMD_MODE_KEY = "dw-mode";
+        private const string CMD_ADDRESS_KEY = "dw-address";
+        private const string CMD_PORT_KEY = "dw-port";
+        private const string CMD_WSS_KEY = "dw-wss";
 
         [Header("DigWar Settings")]
         [Tooltip("무료 MVP 최대 접속자 수 (고정: 24)")]
@@ -58,11 +72,13 @@ namespace Network
         [Tooltip("자동 시작 정책 사용 여부")]
         [SerializeField] private bool _enableAutoStart = true;
 
+#if UNITY_EDITOR
         [Tooltip("에디터 원본 인스턴스 시작 모드")]
         [SerializeField] private AutoStartMode _editorOriginalMode = AutoStartMode.Host;
 
         [Tooltip("ParrelSync Clone 인스턴스 시작 모드")]
         [SerializeField] private AutoStartMode _editorCloneMode = AutoStartMode.Client;
+#endif
 
         #pragma warning disable CS0414
         [Tooltip("빌드 실행 시작 모드")]
@@ -98,6 +114,7 @@ namespace Network
         }
 
         private string _pendingDisconnectReason;
+        private AutoStartMode _runtimeAutoStartMode = AutoStartMode.Disabled;
 
         public override void OnValidate()
         {
@@ -115,6 +132,8 @@ namespace Network
         public override void Start()
         {
             base.Start();
+            ApplyWebClientOverridesFromUrl();
+            ApplyCommandLineOverrides();
 
             if (!_enableAutoStart || NetworkServer.active || NetworkClient.active) return;
 
@@ -129,6 +148,9 @@ namespace Network
         {
             base.OnStartServer();
             Debug.Log($"[Network] Server started. MaxConnections={maxConnections}");
+
+            if (ShouldAutoStartGameplayLoop())
+                TryStartGameplayLoopForDedicatedServer();
         }
 
         public override void OnServerConnect(NetworkConnectionToClient conn)
@@ -157,9 +179,22 @@ namespace Network
             contextLabel = isCloneInstance ? "EditorClone" : "EditorOriginal";
             return isCloneInstance ? _editorCloneMode : _editorOriginalMode;
 #else
+            if (TryResolveCommandLineAutoStartMode(out AutoStartMode commandLineMode))
+            {
+                isCloneInstance = false;
+                contextLabel = "Build(CommandLine)";
+                return commandLineMode;
+            }
+
+#if UNITY_SERVER
+            isCloneInstance = false;
+            contextLabel = "Build(ServerDefault)";
+            return AutoStartMode.Server;
+#else
             isCloneInstance = false;
             contextLabel = "Build";
             return _buildMode;
+#endif
 #endif
         }
 
@@ -174,6 +209,7 @@ namespace Network
 
         private void ApplyAutoStartMode(AutoStartMode mode, string contextLabel, bool isCloneInstance)
         {
+            _runtimeAutoStartMode = mode;
             Debug.Log(
                 $"[Network] AutoStart Policy => Context={contextLabel}, Clone={isCloneInstance}, Mode={mode}");
 
@@ -317,6 +353,16 @@ namespace Network
                 $"[Network] Client transport error: {error} | endpoint={ResolveClientEndpoint()} | reason={rawReason}");
         }
 
+        public override void OnServerError(NetworkConnectionToClient conn, TransportError error, string reason)
+        {
+            base.OnServerError(conn, error, reason);
+
+            int connId = conn != null ? conn.connectionId : -1;
+            string rawReason = string.IsNullOrWhiteSpace(reason) ? "(empty)" : reason;
+            Debug.Log(
+                $"[Network] Server transport error observed: connId={connId}, error={error}, reason={rawReason}");
+        }
+
         private IEnumerator DisconnectNextFrame(NetworkConnectionToClient conn)
         {
             yield return null;
@@ -346,6 +392,387 @@ namespace Network
                 return $"Connection refused{endpointLabel}. Start host first and verify address/port.";
 
             return $"Network error while connecting{endpointLabel}. Please retry shortly.";
+        }
+
+        private void ApplyWebClientOverridesFromUrl()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            if (!(transport is SimpleWebTransport simpleWebTransport))
+                return;
+
+            string absoluteUrl = Application.absoluteURL ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(absoluteUrl))
+                return;
+
+            bool changed = false;
+            string effectiveAddress = string.IsNullOrWhiteSpace(networkAddress)
+                ? _defaultClientAddress
+                : networkAddress;
+
+            if (TryGetQueryParameter(absoluteUrl, WEB_QUERY_SERVER_KEY, out string serverRaw))
+            {
+                if (TryParseServerOverride(serverRaw, out string host, out ushort serverPort))
+                {
+                    networkAddress = host;
+                    effectiveAddress = host;
+                    changed = true;
+
+                    if (serverPort > 0)
+                    {
+                        simpleWebTransport.port = serverPort;
+                        simpleWebTransport.clientWebsocketSettings.ClientPortOption = WebsocketPortOption.SpecifyPort;
+                        simpleWebTransport.clientWebsocketSettings.CustomClientPort = serverPort;
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning($"[Network] Ignored invalid '?{WEB_QUERY_SERVER_KEY}=' value: {serverRaw}");
+                }
+            }
+
+            if (TryGetQueryParameter(absoluteUrl, WEB_QUERY_PORT_KEY, out string portRaw))
+            {
+                if (ushort.TryParse(portRaw, out ushort port) && port > 0)
+                {
+                    simpleWebTransport.port = port;
+                    simpleWebTransport.clientWebsocketSettings.ClientPortOption = WebsocketPortOption.SpecifyPort;
+                    simpleWebTransport.clientWebsocketSettings.CustomClientPort = port;
+                    changed = true;
+                }
+                else
+                {
+                    Debug.LogWarning($"[Network] Ignored invalid '?{WEB_QUERY_PORT_KEY}=' value: {portRaw}");
+                }
+            }
+
+            bool targetUseWss = simpleWebTransport.clientUseWss;
+            bool hasExplicitWss = false;
+
+            if (TryGetQueryParameter(absoluteUrl, WEB_QUERY_WSS_KEY, out string wssRaw))
+            {
+                if (TryParseBooleanFlag(wssRaw, out bool parsedWss))
+                {
+                    targetUseWss = parsedWss;
+                    hasExplicitWss = true;
+                }
+                else
+                {
+                    Debug.LogWarning($"[Network] Ignored invalid '?{WEB_QUERY_WSS_KEY}=' value: {wssRaw}");
+                }
+            }
+
+            if (!hasExplicitWss)
+            {
+                bool pageIsHttps = absoluteUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+                if (pageIsHttps && !IsLoopbackAddress(effectiveAddress))
+                    targetUseWss = true;
+            }
+
+            if (simpleWebTransport.clientUseWss != targetUseWss)
+            {
+                simpleWebTransport.clientUseWss = targetUseWss;
+                changed = true;
+            }
+
+            if (changed)
+            {
+                Debug.Log(
+                    $"[Network] WebGL URL override applied: endpoint={ResolveClientEndpoint()}, " +
+                    $"clientUseWss={simpleWebTransport.clientUseWss}");
+            }
+#endif
+        }
+
+        private void ApplyCommandLineOverrides()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return;
+#else
+            bool changed = false;
+
+            if (TryGetCommandLineOptionValue(CMD_ADDRESS_KEY, out string addressRaw))
+            {
+                string address = addressRaw?.Trim();
+                if (!string.IsNullOrWhiteSpace(address))
+                {
+                    networkAddress = address;
+                    changed = true;
+                }
+            }
+
+            if (TryGetCommandLineOptionValue(CMD_PORT_KEY, out string portRaw))
+            {
+                if (ushort.TryParse(portRaw, out ushort port) && port > 0)
+                {
+                    if (transport is PortTransport portTransport)
+                    {
+                        portTransport.Port = port;
+                        changed = true;
+                    }
+
+                    if (transport is SimpleWebTransport simpleWebTransport)
+                    {
+                        simpleWebTransport.port = port;
+                        simpleWebTransport.clientWebsocketSettings.ClientPortOption = WebsocketPortOption.SpecifyPort;
+                        simpleWebTransport.clientWebsocketSettings.CustomClientPort = port;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning($"[Network] Ignored invalid '-{CMD_PORT_KEY}' value: {portRaw}");
+                }
+            }
+
+            if (TryGetCommandLineOptionValue(CMD_WSS_KEY, out string wssRaw))
+            {
+                if (TryParseBooleanFlag(wssRaw, out bool useWss))
+                {
+                    if (transport is SimpleWebTransport simpleWebTransport && simpleWebTransport.clientUseWss != useWss)
+                    {
+                        simpleWebTransport.clientUseWss = useWss;
+                        changed = true;
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning($"[Network] Ignored invalid '-{CMD_WSS_KEY}' value: {wssRaw}");
+                }
+            }
+
+            if (changed)
+            {
+                Debug.Log(
+                    $"[Network] Command-line override applied: " +
+                    $"modeArg={ResolveCommandLineModeValueOrDefault()}, endpoint={ResolveClientEndpoint()}");
+            }
+#endif
+        }
+
+        private bool TryResolveCommandLineAutoStartMode(out AutoStartMode mode)
+        {
+            mode = AutoStartMode.Disabled;
+
+            if (!TryGetCommandLineOptionValue(CMD_MODE_KEY, out string modeRaw))
+                return false;
+
+            if (string.IsNullOrWhiteSpace(modeRaw))
+                return false;
+
+            switch (modeRaw.Trim().ToLowerInvariant())
+            {
+                case "disabled":
+                case "off":
+                case "none":
+                    mode = AutoStartMode.Disabled;
+                    return true;
+
+                case "host":
+                    mode = AutoStartMode.Host;
+                    return true;
+
+                case "client":
+                    mode = AutoStartMode.Client;
+                    return true;
+
+                case "server":
+                    mode = AutoStartMode.Server;
+                    return true;
+
+                default:
+                    Debug.LogWarning($"[Network] Ignored invalid '-{CMD_MODE_KEY}' value: {modeRaw}");
+                    return false;
+            }
+        }
+
+        private string ResolveCommandLineModeValueOrDefault()
+        {
+            return TryGetCommandLineOptionValue(CMD_MODE_KEY, out string modeRaw) ? modeRaw : "(none)";
+        }
+
+        private static bool TryGetCommandLineOptionValue(string key, out string value)
+        {
+            value = string.Empty;
+            if (string.IsNullOrWhiteSpace(key))
+                return false;
+
+            string normalizedKey = key.Trim().TrimStart('-', '/');
+            if (string.IsNullOrWhiteSpace(normalizedKey))
+                return false;
+
+            string[] args = Environment.GetCommandLineArgs();
+            if (args == null || args.Length == 0)
+                return false;
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                string arg = args[i];
+                if (string.IsNullOrWhiteSpace(arg))
+                    continue;
+
+                string trimmed = arg.Trim();
+                string candidate = trimmed.TrimStart('-', '/');
+
+                int equalsIndex = candidate.IndexOf('=');
+                if (equalsIndex > 0)
+                {
+                    string candidateKey = candidate.Substring(0, equalsIndex);
+                    if (candidateKey.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        value = candidate.Substring(equalsIndex + 1);
+                        return true;
+                    }
+
+                    continue;
+                }
+
+                if (!candidate.Equals(normalizedKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                int nextIndex = i + 1;
+                if (nextIndex < args.Length)
+                {
+                    string nextValue = args[nextIndex];
+                    if (!string.IsNullOrWhiteSpace(nextValue) &&
+                        !nextValue.StartsWith("-", StringComparison.Ordinal) &&
+                        !nextValue.StartsWith("/", StringComparison.Ordinal))
+                    {
+                        value = nextValue.Trim();
+                        return true;
+                    }
+                }
+
+                value = "true";
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool ShouldAutoStartGameplayLoop()
+        {
+            return _runtimeAutoStartMode == AutoStartMode.Server;
+        }
+
+        private void TryStartGameplayLoopForDedicatedServer()
+        {
+            if (Core.GameManager.Instance == null)
+            {
+                Debug.LogWarning("[Network] Dedicated server auto-start skipped: GameManager missing.");
+                return;
+            }
+
+            if (Core.GameManager.Instance.IsGameActive)
+                return;
+
+            Core.GameManager.Instance.StartGame();
+            Debug.Log("[Network] Dedicated server gameplay loop auto-started.");
+        }
+
+        private static bool TryGetQueryParameter(string absoluteUrl, string key, out string value)
+        {
+            value = string.Empty;
+            if (string.IsNullOrWhiteSpace(absoluteUrl) || string.IsNullOrWhiteSpace(key))
+                return false;
+
+            int queryStart = absoluteUrl.IndexOf('?');
+            if (queryStart < 0 || queryStart >= absoluteUrl.Length - 1)
+                return false;
+
+            string query = absoluteUrl.Substring(queryStart + 1);
+            int fragmentStart = query.IndexOf('#');
+            if (fragmentStart >= 0)
+                query = query.Substring(0, fragmentStart);
+
+            if (string.IsNullOrWhiteSpace(query))
+                return false;
+
+            string[] pairs = query.Split('&', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < pairs.Length; i++)
+            {
+                string pair = pairs[i];
+                int equalsIndex = pair.IndexOf('=');
+                string rawName = equalsIndex >= 0 ? pair.Substring(0, equalsIndex) : pair;
+                string rawValue = equalsIndex >= 0 ? pair.Substring(equalsIndex + 1) : string.Empty;
+
+                string decodedName = Uri.UnescapeDataString(rawName.Replace('+', ' '));
+                if (!decodedName.Equals(key, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                value = Uri.UnescapeDataString(rawValue.Replace('+', ' '));
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryParseServerOverride(string rawValue, out string host, out ushort port)
+        {
+            host = string.Empty;
+            port = 0;
+
+            if (string.IsNullOrWhiteSpace(rawValue))
+                return false;
+
+            string candidate = rawValue.Trim();
+            if (candidate.IndexOf("://", StringComparison.Ordinal) < 0)
+                candidate = $"ws://{candidate}";
+
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out Uri uri))
+                return false;
+
+            if (string.IsNullOrWhiteSpace(uri.Host))
+                return false;
+
+            host = uri.Host;
+            if (!uri.IsDefaultPort && uri.Port > 0 && uri.Port <= ushort.MaxValue)
+                port = (ushort)uri.Port;
+
+            return true;
+        }
+
+        private static bool TryParseBooleanFlag(string rawValue, out bool value)
+        {
+            value = false;
+            if (string.IsNullOrWhiteSpace(rawValue))
+                return false;
+
+            switch (rawValue.Trim().ToLowerInvariant())
+            {
+                case "1":
+                case "true":
+                case "yes":
+                case "y":
+                case "on":
+                    value = true;
+                    return true;
+
+                case "0":
+                case "false":
+                case "no":
+                case "n":
+                case "off":
+                    value = false;
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsLoopbackAddress(string address)
+        {
+            if (string.IsNullOrWhiteSpace(address))
+                return false;
+
+            string normalized = address.Trim();
+            if (normalized.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (IPAddress.TryParse(normalized, out IPAddress ipAddress))
+                return IPAddress.IsLoopback(ipAddress);
+
+            return false;
         }
 
         private string ResolveClientEndpoint()
@@ -463,7 +890,57 @@ namespace Network
                     $"deliveryEma={snapshotSettings.deliveryTimeEmaDuration}");
             }
 
+            ApplySimpleWebRuntimeProfile(logWarnings);
             ApplyPlayerTransformRuntimeProfile(logWarnings);
+        }
+
+        private void ApplySimpleWebRuntimeProfile(bool logWarnings)
+        {
+            if (!(transport is SimpleWebTransport simpleWebTransport))
+                return;
+
+            bool changed = false;
+
+            if (simpleWebTransport.sendTimeout != FREE_MVP_SIMPLEWEB_SEND_TIMEOUT_MS)
+            {
+                simpleWebTransport.sendTimeout = FREE_MVP_SIMPLEWEB_SEND_TIMEOUT_MS;
+                changed = true;
+            }
+
+            if (simpleWebTransport.receiveTimeout != FREE_MVP_SIMPLEWEB_RECEIVE_TIMEOUT_MS)
+            {
+                simpleWebTransport.receiveTimeout = FREE_MVP_SIMPLEWEB_RECEIVE_TIMEOUT_MS;
+                changed = true;
+            }
+
+            if (simpleWebTransport.serverMaxMsgsPerTick != FREE_MVP_SIMPLEWEB_SERVER_MAX_MSGS_PER_TICK)
+            {
+                simpleWebTransport.serverMaxMsgsPerTick = FREE_MVP_SIMPLEWEB_SERVER_MAX_MSGS_PER_TICK;
+                changed = true;
+            }
+
+            if (simpleWebTransport.clientMaxMsgsPerTick != FREE_MVP_SIMPLEWEB_CLIENT_MAX_MSGS_PER_TICK)
+            {
+                simpleWebTransport.clientMaxMsgsPerTick = FREE_MVP_SIMPLEWEB_CLIENT_MAX_MSGS_PER_TICK;
+                changed = true;
+            }
+
+            if (simpleWebTransport.noDelay != FREE_MVP_SIMPLEWEB_NO_DELAY)
+            {
+                simpleWebTransport.noDelay = FREE_MVP_SIMPLEWEB_NO_DELAY;
+                changed = true;
+            }
+
+            if (changed && logWarnings)
+            {
+                Debug.LogWarning(
+                    $"[Network] SimpleWeb profile enforced: " +
+                    $"sendTimeout={simpleWebTransport.sendTimeout}ms, " +
+                    $"receiveTimeout={simpleWebTransport.receiveTimeout}ms, " +
+                    $"serverMaxMsgs={simpleWebTransport.serverMaxMsgsPerTick}, " +
+                    $"clientMaxMsgs={simpleWebTransport.clientMaxMsgsPerTick}, " +
+                    $"noDelay={simpleWebTransport.noDelay}");
+            }
         }
 
         private void ApplyPlayerTransformRuntimeProfile(bool logWarnings)

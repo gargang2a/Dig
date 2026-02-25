@@ -71,7 +71,7 @@ namespace Core
         {
             if (_sandwormPrefab == null)
             {
-                Debug.LogWarning("[SandwormManager] 프리팹이 할당되지 않았습니다.");
+                Debug.LogWarning("[SandwormManager] Sandworm prefab is not assigned.");
                 return;
             }
 
@@ -112,7 +112,7 @@ namespace Core
                 NetworkServer.Spawn(worm, SANDWORM_ASSET_ID);
                 worm.SetActive(true);
 
-                Debug.Log($"🐛 [SandwormManager] Sandworm_{i} 네트워크 스폰 at {spawnPos}");
+                Debug.Log($"[SandwormManager] Spawned Sandworm_{i} at {spawnPos}");
             }
         }
 
@@ -122,7 +122,7 @@ namespace Core
         {
             if (_sandwormPrefab == null)
             {
-                Debug.LogError("[SandwormManager] 클라이언트: 프리팹 누락");
+                Debug.LogError("[SandwormManager] Client spawn failed: prefab missing.");
                 // 빈 오브젝트라도 반환해야 Mirror가 크래시하지 않음
                 var empty = new GameObject("Sandworm_Empty");
                 empty.SetActive(false);

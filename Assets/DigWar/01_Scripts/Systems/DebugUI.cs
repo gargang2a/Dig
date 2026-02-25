@@ -27,6 +27,9 @@ namespace Systems
         private const KeyCode ALT_MOVEMENT_LOCK_KEY = KeyCode.Alpha0;
         private const KeyCode ALT_SLOW_MOTION_KEY = KeyCode.Minus;
         private const KeyCode ALT_AUTO_MODE_KEY = KeyCode.Equals;
+        private const KeyCode AUTO_MODE_OFF_KEY = KeyCode.LeftBracket;
+        private const KeyCode AUTO_MODE_ON_KEY = KeyCode.RightBracket;
+        private const KeyCode MUTE_TOGGLE_KEY = KeyCode.M;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -61,6 +64,9 @@ namespace Systems
         private bool _movementLockToggleRequested;
         private bool _slowMotionToggleRequested;
         private bool _autoModeToggleRequested;
+        private bool _autoModeEnableRequested;
+        private bool _autoModeDisableRequested;
+        private bool _muteToggleRequested;
         private bool _slowMotionEnabled;
 
         [Header("Auto Test")]
@@ -77,7 +83,7 @@ namespace Systems
             _player = ResolveLocalPlayer();
             ResetKpiSession();
             Player.PlayerController.SetGlobalAutoModeEnabled(_enableAutoModeOnStart);
-            Debug.Log($"[DebugUI] Active. Hotkeys: F8/F9/F10/F11/F12 (alt: 9/0/-/=), AutoModeOnStart={_enableAutoModeOnStart}.");
+            Debug.Log($"[DebugUI] Active. Hotkeys: F8/F9/F10/F11/F12/[\\]/M (alt: 9/0/-/=), AutoModeOnStart={_enableAutoModeOnStart}.");
         }
 
         private void OnDisable()
@@ -236,11 +242,13 @@ namespace Systems
             Label("");
             Label("<b>— QA KPI —</b>");
             Label($"세션 시간: {FormatDuration(GetSessionDurationSeconds())}");
-            Label("핫키: F8(리셋) / F9(스냅샷) / F10(동결) / F11(슬로우) / F12(자동)");
-            Label("대체키: 9(스냅샷) / 0(동결) / -(슬로우) / =(자동)");
+            Label("핫키: F8(리셋) / F9(스냅샷) / F10(동결) / F11(슬로우) / F12(자동토글)");
+            Label("추가키: [(자동OFF) / ](자동ON) / M(음소거)");
+            Label("대체키: 9(스냅샷) / 0(동결) / -(슬로우) / =(자동토글)");
             Label($"로컬 이동 동결: <color={(_player != null && _player.IsDebugMovementLocked ? "orange" : "lime")}>{(_player != null && _player.IsDebugMovementLocked ? "ON" : "OFF")}</color>");
             Label($"슬로우모션: <color={(_slowMotionEnabled ? "orange" : "lime")}>{(_slowMotionEnabled ? "ON" : "OFF")}</color>");
             Label($"자동 테스트 모드: <color={(Player.PlayerController.IsGlobalAutoModeEnabled ? "orange" : "lime")}>{(Player.PlayerController.IsGlobalAutoModeEnabled ? "ON" : "OFF")}</color>");
+            Label($"사운드 음소거: <color={(IsSoundMuted() ? "orange" : "lime")}>{(IsSoundMuted() ? "ON" : "OFF")}</color>");
 
             if (GUILayout.Button(_player != null && _player.IsDebugMovementLocked ? "로컬 이동 동결 해제 (F10)" : "로컬 이동 동결 (F10)"))
                 ToggleLocalMovementLock();
@@ -250,6 +258,15 @@ namespace Systems
 
             if (GUILayout.Button(Player.PlayerController.IsGlobalAutoModeEnabled ? "자동 테스트 모드 OFF (F12)" : "자동 테스트 모드 ON (F12)"))
                 ToggleAutoMode();
+
+            if (GUILayout.Button("자동 테스트 모드 ON (])"))
+                SetAutoMode(true);
+
+            if (GUILayout.Button("자동 테스트 모드 OFF ([)"))
+                SetAutoMode(false);
+
+            if (GUILayout.Button(IsSoundMuted() ? "음소거 해제 (M)" : "음소거 ON (M)"))
+                ToggleMute();
 
             if (GUILayout.Button("KPI 스냅샷 로그 출력"))
                 EmitKpiSnapshotLog("manual-gui");
@@ -401,6 +418,27 @@ namespace Systems
             if (autoModeRequested)
                 ToggleAutoMode();
 
+            bool autoModeOnRequested =
+                ConsumeRequested(ref _autoModeEnableRequested) ||
+                IsLegacyHotkeyPressed(AUTO_MODE_ON_KEY) ||
+                IsInputSystemHotkeyPressed(AUTO_MODE_ON_KEY);
+            if (autoModeOnRequested)
+                SetAutoMode(true);
+
+            bool autoModeOffRequested =
+                ConsumeRequested(ref _autoModeDisableRequested) ||
+                IsLegacyHotkeyPressed(AUTO_MODE_OFF_KEY) ||
+                IsInputSystemHotkeyPressed(AUTO_MODE_OFF_KEY);
+            if (autoModeOffRequested)
+                SetAutoMode(false);
+
+            bool muteRequested =
+                ConsumeRequested(ref _muteToggleRequested) ||
+                IsLegacyHotkeyPressed(MUTE_TOGGLE_KEY) ||
+                IsInputSystemHotkeyPressed(MUTE_TOGGLE_KEY);
+            if (muteRequested)
+                ToggleMute();
+
             bool isClientConnected = NetworkClient.isConnected;
             if (isClientConnected && !_wasClientConnected)
             {
@@ -486,6 +524,27 @@ namespace Systems
             {
                 _autoModeToggleRequested = true;
                 currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.keyCode == AUTO_MODE_ON_KEY)
+            {
+                _autoModeEnableRequested = true;
+                currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.keyCode == AUTO_MODE_OFF_KEY)
+            {
+                _autoModeDisableRequested = true;
+                currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.keyCode == MUTE_TOGGLE_KEY)
+            {
+                _muteToggleRequested = true;
+                currentEvent.Use();
             }
         }
 
@@ -514,6 +573,12 @@ namespace Systems
                     return keyboard.digit0Key.wasPressedThisFrame;
                 case KeyCode.Minus:
                     return keyboard.minusKey.wasPressedThisFrame;
+                case KeyCode.LeftBracket:
+                    return keyboard.leftBracketKey.wasPressedThisFrame;
+                case KeyCode.RightBracket:
+                    return keyboard.rightBracketKey.wasPressedThisFrame;
+                case KeyCode.M:
+                    return keyboard.mKey.wasPressedThisFrame;
             }
 #endif
             return false;
@@ -544,8 +609,35 @@ namespace Systems
 
         private static void ToggleAutoMode()
         {
-            bool next = !Player.PlayerController.IsGlobalAutoModeEnabled;
-            Player.PlayerController.SetGlobalAutoModeEnabled(next);
+            SetAutoMode(!Player.PlayerController.IsGlobalAutoModeEnabled);
+        }
+
+        private static void SetAutoMode(bool enabled)
+        {
+            if (Player.PlayerController.IsGlobalAutoModeEnabled == enabled) return;
+            Player.PlayerController.SetGlobalAutoModeEnabled(enabled);
+        }
+
+        private static void ToggleMute()
+        {
+            SoundManager soundManager = SoundManager.Instance;
+            if (soundManager == null)
+            {
+                AudioListener.pause = !AudioListener.pause;
+                Debug.Log($"[DebugUI] AudioListener mute fallback {(AudioListener.pause ? "ON" : "OFF")}");
+                return;
+            }
+
+            soundManager.ToggleMute();
+        }
+
+        private static bool IsSoundMuted()
+        {
+            SoundManager soundManager = SoundManager.Instance;
+            if (soundManager != null)
+                return soundManager.IsMuted;
+
+            return AudioListener.pause;
         }
 
         private void ApplySlowMotionTimeScale()
@@ -579,6 +671,13 @@ namespace Systems
             bool pressed = requestedByOnGui || IsLegacyHotkeyPressed(keyCode) || IsInputSystemHotkeyPressed(keyCode);
             requestedByOnGui = false;
             return pressed;
+        }
+
+        private static bool ConsumeRequested(ref bool requestedByOnGui)
+        {
+            bool requested = requestedByOnGui;
+            requestedByOnGui = false;
+            return requested;
         }
 
         private void ResetKpiSession()

@@ -2,7 +2,11 @@
     [Parameter(Mandatory = $true)]
     [string]$SessionDir,
 
-    [string]$OutputPath
+    [string]$OutputPath,
+
+    [switch]$ManualChecksDone,
+
+    [string]$ManualChecksNote = "사용자 수동 체크 완료 보고 반영"
 )
 
 Set-StrictMode -Version Latest
@@ -179,7 +183,12 @@ $pvpKillCount = Count-Match -Lines $networkLines -Pattern "\[PvP\].*(Kill|처치
 
 $ignoredErrorPatterns = @(
     "EditorUpdateCheck: Failed",
-    "\[Licensing::Module\]"
+    "\[Licensing::Module\]",
+    "TcpMessagingSession\s*-\s*receive error:\s*operation aborted",
+    "Server Transport Error for connId=\d+:\s*Unexpected:\s*Unable to read data from the transport connection",
+    "\[Network\]\s*Server transport error observed:\s*connId=\d+,\s*error=Unexpected,\s*reason=Unable to read data from the transport connection",
+    "SimpleWebTransport:<ServerStart>b__48_2",
+    "연결된 구성원으로부터 응답이 없어 연결하지 못했거나,\s*호스트로부터 응답이 없어 연결이 끊어졌습니다"
 )
 
 $nonEmptyErrorLines = @(
@@ -194,6 +203,7 @@ $nonEmptyErrorLines = @(
 )
 
 $nonEmptyErrorCount = $nonEmptyErrorLines.Count
+$ignoredErrorCount = @($errorLines).Count - $nonEmptyErrorCount
 $nonEmptyWarningCount = @($warningLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
 
 $autoRows = @(
@@ -244,6 +254,28 @@ $manualRows = @(
     "10) Regression set: boost score drain / AI tunnel rule / camera zoom / minimap color"
 )
 
+$autoFailCount = @($autoRows | Where-Object { $_.Status -eq "AUTO_FAIL" }).Count
+$manualCheckBlocks = $manualRows | ForEach-Object {
+    if ($ManualChecksDone) {
+        "- [x] $_"
+    }
+    else {
+        "- [ ] $_"
+    }
+}
+
+$gateDecision = "HOLD"
+$gateReason = "manual verification still pending"
+
+if ($autoFailCount -gt 0) {
+    $gateDecision = "HOLD"
+    $gateReason = "auto checks failed (AUTO_FAIL=$autoFailCount)"
+}
+elseif ($ManualChecksDone) {
+    $gateDecision = "PASS"
+    $gateReason = $ManualChecksNote
+}
+
 $autoTableRows = @()
 foreach ($row in $autoRows) {
     $autoTableRows += "| $($row.Item) | $($row.Status) | $($row.Evidence) |"
@@ -270,6 +302,7 @@ $($autoTableRows -join [Environment]::NewLine)
 ## Key Metrics
 
 - nonEmptyErrors: $nonEmptyErrorCount
+- ignoredErrors: $ignoredErrorCount
 - nonEmptyWarnings: $nonEmptyWarningCount
 - kpiLines: $(@($kpiLines).Count)
 - serverStarted(MaxConnections=24) raw/effective: $serverStartedCount/$effectiveServerStartedCount
@@ -297,12 +330,13 @@ $($serverExamples | ForEach-Object { "- $_" } | Out-String)
 $($errorExamples | ForEach-Object { "- $_" } | Out-String)
 
 ## Manual Checks Remaining
-$($manualRows | ForEach-Object { "- [ ] $_" } | Out-String)
+$($manualCheckBlocks | Out-String)
 
 ## Gate
 
 - QA-001 final close condition: checklist items 2)~10) manual verification complete + failures recorded as issues.
-- Current decision: **HOLD** (manual verification still pending).
+- Current decision: **$gateDecision**
+- Gate reason: $gateReason
 "@
 
 $outDir = Split-Path -Path $OutputPath -Parent

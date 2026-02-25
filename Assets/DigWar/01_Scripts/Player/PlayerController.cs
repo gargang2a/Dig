@@ -36,11 +36,14 @@ namespace Player
         private float _autoRespawnAt = -1f;
 
         private const float NETWORK_KILL_REQUEST_INTERVAL = 0.1f;
-        private const float NETWORK_KILL_TARGET_SCAN_RADIUS = 8f;
+        private const float CLIENT_MAX_BOT_KILL_REQUEST_DISTANCE = 6.8f;
+        private const float CLIENT_MAX_PLAYER_KILL_REQUEST_DISTANCE = 8.4f;
         private const float AUTO_MOVE_RETARGET_INTERVAL = 1.2f;
         private const float AUTO_MOVE_REACH_DISTANCE = 1.0f;
         private const float AUTO_RESPAWN_DELAY_SECONDS = 1.0f;
         private const float AUTO_TARGET_MAX_SEARCH_DISTANCE = 40f;
+        private const float LOCAL_RESPAWN_TUNNEL_RESUME_DELAY_SECONDS = 0.35f;
+        private const float REMOTE_RESPAWN_TUNNEL_RESUME_DELAY_SECONDS = 0.9f;
 
         private static bool _globalAutoModeEnabled;
 
@@ -383,8 +386,10 @@ namespace Player
                 NetworkIdentity targetIdentity = ResolveNetworkKillTarget(myNetPlayer, other);
                 if (targetIdentity == null) return;
 
+                Vector2 attackerReportedPos = transform.position;
+                Vector2 targetReportedPos = targetIdentity.transform.position;
                 _nextNetworkKillRequestAt = Time.time + NETWORK_KILL_REQUEST_INTERVAL;
-                myNetPlayer.CmdRequestKill(targetIdentity);
+                myNetPlayer.CmdRequestKillWithReported(targetIdentity, attackerReportedPos, targetReportedPos);
                 return;
             }
 
@@ -409,53 +414,34 @@ namespace Player
 
         private NetworkIdentity ResolveNetworkKillTarget(Network.NetworkPlayer myNetPlayer, Collider2D triggerCollider)
         {
-            if (myNetPlayer == null) return null;
+            if (myNetPlayer == null || triggerCollider == null) return null;
 
-            float scale = Mathf.Max(1f, Mathf.Abs(transform.localScale.x));
-            float scanRadius = Mathf.Max(NETWORK_KILL_TARGET_SCAN_RADIUS, scale * 6f);
-            float maxSqrDistance = scanRadius * scanRadius;
-            NetworkIdentity selfIdentity = myNetPlayer.netIdentity;
+            NetworkIdentity candidate = triggerCollider.GetComponent<NetworkIdentity>();
+            if (candidate == null)
+                candidate = triggerCollider.GetComponentInParent<NetworkIdentity>();
+            if (candidate == null) return null;
+            if (candidate == myNetPlayer.netIdentity) return null;
+            if (!candidate.gameObject.activeInHierarchy) return null;
 
-            NetworkIdentity bestTarget = null;
-            float bestSqrDistance = float.MaxValue;
+            var targetPlayer = candidate.GetComponent<Network.NetworkPlayer>();
+            if (targetPlayer != null && targetPlayer.IsDead) return null;
 
-            void ConsiderCandidate(NetworkIdentity candidate)
+            var targetBot = candidate.GetComponent<Network.NetworkBot>();
+            if (targetBot != null)
             {
-                if (candidate == null) return;
-                if (candidate == selfIdentity) return;
-                if (!candidate.gameObject.activeInHierarchy) return;
-
-                float sqrDistance = (candidate.transform.position - transform.position).sqrMagnitude;
-                if (sqrDistance > maxSqrDistance) return;
-                if (sqrDistance >= bestSqrDistance) return;
-
-                bestSqrDistance = sqrDistance;
-                bestTarget = candidate;
+                var botController = targetBot.GetComponent<AIController>();
+                if (botController != null && botController.IsDead) return null;
             }
 
-            if (triggerCollider != null)
-            {
-                NetworkIdentity preferred = triggerCollider.GetComponent<NetworkIdentity>();
-                if (preferred == null)
-                    preferred = triggerCollider.GetComponentInParent<NetworkIdentity>();
+            // 클라이언트에서 비정상적으로 먼 타깃 요청을 미리 걸러
+            // 서버 distance reject 스팸을 줄인다.
+            float maxRequestDistance = targetPlayer != null
+                ? CLIENT_MAX_PLAYER_KILL_REQUEST_DISTANCE
+                : CLIENT_MAX_BOT_KILL_REQUEST_DISTANCE;
+            float sqrDistance = (candidate.transform.position - transform.position).sqrMagnitude;
+            if (sqrDistance > maxRequestDistance * maxRequestDistance) return null;
 
-                ConsiderCandidate(preferred);
-            }
-
-            foreach (Network.NetworkPlayer player in Network.NetworkPlayer.ActivePlayers)
-            {
-                if (player == null || player == myNetPlayer) continue;
-                if (player.IsDead) continue;
-                ConsiderCandidate(player.netIdentity);
-            }
-
-            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
-            {
-                if (bot == null) continue;
-                ConsiderCandidate(bot.netIdentity);
-            }
-
-            return bestTarget;
+            return candidate;
         }
 
         public void AddScore(float amount)
@@ -518,10 +504,24 @@ namespace Player
         /// </summary>
         public void RemoteRespawn()
         {
+            RemoteRespawn(transform.position);
+        }
+
+        public void RemoteRespawn(Vector3 respawnPosition)
+        {
+            Vector3 preRespawnPosition = transform.position;
+
             _isDead = false;
             _nextNetworkKillRequestAt = 0f;
             _autoRespawnAt = -1f;
             _isAttacking = false;
+            _nextAutoRetargetAt = 0f;
+            _autoMoveTarget = respawnPosition;
+
+            Vector3 snappedRespawnPosition = new Vector3(respawnPosition.x, respawnPosition.y, transform.position.z);
+            transform.position = snappedRespawnPosition;
+            if (_rb != null)
+                _rb.position = new Vector2(snappedRespawnPosition.x, snappedRespawnPosition.y);
 
             float minScale = GameManager.Instance != null
                 ? GameManager.Instance.Settings.MinScale : 0.5f;
@@ -537,7 +537,14 @@ namespace Player
                 _growth.SetScore(0f);
 
             if (_tunnelGen != null)
+            {
+                float respawnJumpDistance = Vector2.Distance(preRespawnPosition, snappedRespawnPosition);
+                float settleRadius = respawnJumpDistance >= 1.5f ? 1.25f : 0.9f;
+                float anchorTimeout = respawnJumpDistance >= 4f ? 2.2f : 1.5f;
+                _tunnelGen.ArmRespawnAnchor(snappedRespawnPosition, settleRadius, anchorTimeout);
+                _tunnelGen.SuppressDiggingFor(REMOTE_RESPAWN_TUNNEL_RESUME_DELAY_SECONDS);
                 _tunnelGen.SetDigging(true);
+            }
         }
 
         /// <summary>
@@ -578,7 +585,11 @@ namespace Player
 
             // 터널 생성 재시작
             if (_tunnelGen != null)
+            {
+                _tunnelGen.ArmRespawnAnchor(transform.position);
+                _tunnelGen.SuppressDiggingFor(LOCAL_RESPAWN_TUNNEL_RESUME_DELAY_SECONDS);
                 _tunnelGen.SetDigging(true);
+            }
 
             CurrentSpeed = _settings != null ? _settings.BaseSpeed : 3f;
 

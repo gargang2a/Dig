@@ -22,6 +22,7 @@ namespace Systems
         [SerializeField] private float _playerDotSize = 8f;
         [SerializeField] private float _botDotSize = 5f;
         [SerializeField] private float _sandwormDotSize = 10f;
+        [SerializeField] private bool _verboseDebugLogs;
 
         private RawImage _tunnelMaskImage;
         private RectTransform _minimapRoot;
@@ -290,7 +291,8 @@ namespace Systems
                     }
                     wormIndex++;
                 }
-                Debug.Log($"[Minimap] 샌드웜 도트 {needed}개 생성");
+                if (_verboseDebugLogs)
+                    Debug.Log($"[Minimap] Rebuilt sandworm dots: count={needed}");
             }
 
             // 위치 업데이트

@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using Core;
@@ -6,12 +6,12 @@ using Core;
 namespace Systems
 {
     /// <summary>
-    /// 게임 오버 UI. Canvas에 미리 배치된 TMP/Button을 참조한다.
-    /// 기본적으로 패널이 비활성화 상태이며, 사망 시 활성화된다.
+    /// Game over UI controller.
+    /// It toggles the panel, updates score text, and triggers local respawn.
     /// </summary>
     public class GameOverUI : MonoBehaviour
     {
-        [Header("UI 참조")]
+        [Header("UI References")]
         [SerializeField] private GameObject _panel;
         [SerializeField] private TMP_Text _scoreText;
         [SerializeField] private Button _restartButton;
@@ -72,7 +72,7 @@ namespace Systems
                     ? GameManager.Instance.PlayerName : "Player";
                 // <size=120%><color=#FFD700>Name</color></size>
                 // <size=80%>Final Score: 999</size>
-                _scoreText.richText = true; // Ensure Rich Text is enabled
+                _scoreText.richText = true;
                 _scoreText.text = $"<size=120%><color=#FFD700>{name}</color></size>\n<size=75%>Final Score: {score:F0}</size>";
             }
 
@@ -87,15 +87,14 @@ namespace Systems
         {
             _isGameOver = false;
 
-            // 패널 숨기기
+            // Hide panel
             if (_panel != null)
                 _panel.SetActive(false);
 
-            // 로컬 플레이어의 Respawn 호출 (씬 리로드 X)
+            // Respawn local player (no scene reload)
             if (TryRespawnLocalNetworkPlayer()) return;
             if (TryRespawnLocalSinglePlayer()) return;
             Debug.LogWarning("[GameOverUI] Restart requested but no local player was found.");
-
         }
 
         private bool TryRespawnLocalNetworkPlayer()
@@ -108,9 +107,9 @@ namespace Systems
 
             pc.Respawn();
             if (Network.NetworkPlayer.CanSendCommands)
-                localNetworkPlayer.CmdRespawn();
+                localNetworkPlayer.CmdRespawnWithReportedPosition(pc.transform.position);
             else
-                Debug.LogWarning("[GameOverUI] CmdRespawn skipped: client not connected.");
+                Debug.LogWarning("[GameOverUI] CmdRespawnWithReportedPosition skipped: client not connected.");
             return true;
         }
 
