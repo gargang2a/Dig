@@ -70,6 +70,20 @@
         showBanner: unityShowBanner,
       };
 
+      // digwar-low-spec-mode
+      var queryParams = new URLSearchParams(window.location.search);
+      var lowSpecMode = queryParams.get("low") === "1";
+      if (lowSpecMode) {
+        config.devicePixelRatio = 1;
+        config.webglContextAttributes = Object.assign({}, config.webglContextAttributes || {}, {
+          antialias: false,
+          alpha: false,
+          depth: true,
+          stencil: false,
+          preserveDrawingBuffer: false,
+          powerPreference: "low-power"
+        });
+      }
       // By default, Unity keeps WebGL canvas render target size matched with
       // the DOM size of the canvas element (scaled by window.devicePixelRatio)
       // Set this to false if you want to decouple this synchronization from
@@ -139,8 +153,11 @@
                 }
 
                 canvas.addEventListener("pointerdown", requestFullscreen, { once: true });
-              }).catch((message) => {
-                alert(message);
+                            }).catch((message) => {
+                // digwar-load-error-fallback
+                var reason = (typeof message === "string") ? message : JSON.stringify(message);
+                console.error("[DigWar] Unity load failed:", reason);
+                unityShowBanner("WebGL graphics initialization failed. Enable hardware acceleration and retry with ?low=1", "error");
               });
             };
 
