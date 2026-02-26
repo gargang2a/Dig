@@ -2086,13 +2086,13 @@ var tempI64;
 // === Body ===
 
 var ASM_CONSTS = {
-  5148352: function() {return Module.webglContextAttributes.premultipliedAlpha;},  
- 5148413: function() {return Module.webglContextAttributes.preserveDrawingBuffer;},  
- 5148477: function() {return Module.webglContextAttributes.powerPreference;},  
- 5148535: function() {Module['emscripten_get_now_backup'] = performance.now;},  
- 5148590: function($0) {performance.now = function() { return $0; };},  
- 5148638: function($0) {performance.now = function() { return $0; };},  
- 5148686: function() {performance.now = Module['emscripten_get_now_backup'];}
+  5148608: function() {return Module.webglContextAttributes.premultipliedAlpha;},  
+ 5148669: function() {return Module.webglContextAttributes.preserveDrawingBuffer;},  
+ 5148733: function() {return Module.webglContextAttributes.powerPreference;},  
+ 5148791: function() {Module['emscripten_get_now_backup'] = performance.now;},  
+ 5148846: function($0) {performance.now = function() { return $0; };},  
+ 5148894: function($0) {performance.now = function() { return $0; };},  
+ 5148942: function() {performance.now = Module['emscripten_get_now_backup'];}
 };
 
 
@@ -16590,6 +16590,7 @@ var asmLibraryArg = {
   "invoke_iiiidii": invoke_iiiidii,
   "invoke_iiiifii": invoke_iiiifii,
   "invoke_iiiii": invoke_iiiii,
+  "invoke_iiiiifiiii": invoke_iiiiifiiii,
   "invoke_iiiiifiiiii": invoke_iiiiifiiiii,
   "invoke_iiiiii": invoke_iiiiii,
   "invoke_iiiiiifii": invoke_iiiiiifii,
@@ -17148,6 +17149,15 @@ var dynCall_jiiiii = Module["dynCall_jiiiii"] = createExportWrapper("dynCall_jii
 
 /** @type {function(...*):?} */
 var dynCall_viiiifii = Module["dynCall_viiiifii"] = createExportWrapper("dynCall_viiiifii");
+
+/** @type {function(...*):?} */
+var dynCall_iiiiifiiii = Module["dynCall_iiiiifiiii"] = createExportWrapper("dynCall_iiiiifiiii");
+
+/** @type {function(...*):?} */
+var dynCall_iifiifi = Module["dynCall_iifiifi"] = createExportWrapper("dynCall_iifiifi");
+
+/** @type {function(...*):?} */
+var dynCall_iififi = Module["dynCall_iififi"] = createExportWrapper("dynCall_iififi");
 
 /** @type {function(...*):?} */
 var dynCall_vifiii = Module["dynCall_vifiii"] = createExportWrapper("dynCall_vifiii");
@@ -18940,6 +18950,17 @@ function invoke_iiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10) {
   var sp = stackSave();
   try {
     return dynCall_iiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10);
+  } catch(e) {
+    stackRestore(sp);
+    if (e !== e+0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
+function invoke_iiiiifiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9) {
+  var sp = stackSave();
+  try {
+    return dynCall_iiiiifiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9);
   } catch(e) {
     stackRestore(sp);
     if (e !== e+0) throw e;
