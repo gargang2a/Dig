@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 using Core;
 using Core.Data;
 
@@ -20,6 +21,16 @@ namespace Tunnel
         [Tooltip("터널 바닥 텍스처 (어두운 암석/흙)")]
         [SerializeField] private Texture _floorTexture;
 
+        [Header("Performance")]
+        [Tooltip("Tunnel mask runtime resolution upper bound. Lower value reduces main-thread/GPU pressure.")]
+        [SerializeField] private int _runtimeMaxMaskResolution = 1024;
+        [Tooltip("Max draw-hole stamps accepted per frame.")]
+        [SerializeField] private int _maxPendingHolesPerFrame = 256;
+        [Tooltip("Max erase-hole stamps accepted per frame.")]
+        [SerializeField] private int _maxPendingErasesPerFrame = 256;
+        [Tooltip("Enable periodic warning logs when stamp budget is exceeded.")]
+        [SerializeField] private bool _logStampBudgetDrops;
+
         [Header("Visuals (Real-time Tuning)")]
         [Tooltip("터널 바닥 색상 틴트 (기본: 흰색)")]
         [SerializeField] private Color _floorColor = Color.white;
@@ -36,6 +47,7 @@ namespace Tunnel
         private RenderTexture _maskTexture;
         private Material _brushMaterial;
         private Material _eraserMaterial;
+        private bool _isHeadlessRuntime;
 
         // 맵 정보 (좌표 변환용)
         private float _mapRadius;
@@ -45,6 +57,16 @@ namespace Tunnel
         // A2 Fix: Awake에서 RT 초기화 (TunnelGenerator.Start()보다 먼저 실행 보장)
         private void Awake()
         {
+            _isHeadlessRuntime = Application.isBatchMode || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null;
+            if (_isHeadlessRuntime)
+            {
+                // Dedicated server(Null Gfx)에서는 터널 마스크 렌더링이 불가능하므로
+                // 매 프레임 셰이더 에러를 방지하기 위해 컴포넌트를 비활성화한다.
+                enabled = false;
+                Debug.Log("[TunnelMaskManager] Headless runtime detected. Tunnel mask rendering disabled.");
+                return;
+            }
+
             // Singleton
             if (Instance != null && Instance != this)
             {
@@ -58,6 +80,7 @@ namespace Tunnel
 
         private void Start()
         {
+            if (_isHeadlessRuntime) return;
             UpdateShaderGlobals();
         }
 
@@ -79,16 +102,26 @@ namespace Tunnel
 
         private void InitializeTexture()
         {
+            if (_isHeadlessRuntime) return;
+
             if (_brushShader == null)
                 _brushShader = Shader.Find("DigWar/TunnelBrush");
             if (_eraserShader == null)
                 _eraserShader = Shader.Find("DigWar/TunnelEraser");
 
+            if (_brushShader == null || _eraserShader == null)
+            {
+                Debug.LogWarning("[TunnelMaskManager] Brush/Eraser shader missing. Tunnel mask disabled.");
+                enabled = false;
+                return;
+            }
+
             _brushMaterial = new Material(_brushShader);
             _eraserMaterial = new Material(_eraserShader);
 
             // R8: 단일 채널(Red)만 필요 (메모리 절약)
-            _maskTexture = new RenderTexture(_textureResolution, _textureResolution, 0, RenderTextureFormat.R8);
+            int runtimeResolution = ResolveRuntimeMaskResolution();
+            _maskTexture = new RenderTexture(runtimeResolution, runtimeResolution, 0, RenderTextureFormat.R8);
             _maskTexture.name = "TunnelMaskRT";
             _maskTexture.filterMode = FilterMode.Bilinear; // 부드러운 보간
             _maskTexture.wrapMode = TextureWrapMode.Clamp; // 텍스처 밖으로 나가지 않게
@@ -104,7 +137,7 @@ namespace Tunnel
             }
             else
             {
-                _mapRadius = 50f; // Default
+                _mapRadius = 65f; // Default
             }
 
             _mapSize = _mapRadius * 2f;
@@ -147,13 +180,25 @@ namespace Tunnel
         }
         private readonly List<HoleData> _pendingHoles = new List<HoleData>(32);
         private readonly List<HoleData> _pendingErases = new List<HoleData>(16);
+        private int _droppedHoleStampCount;
+        private int _droppedEraseStampCount;
+        private float _nextStampBudgetLogAt;
+        private const float STAMP_BUDGET_LOG_INTERVAL_SECONDS = 5f;
 
         /// <summary>
         /// 특정 위치에 구멍을 낸다 (큐에 추가 → LateUpdate에서 일괄 렌더링).
         /// </summary>
         public void DrawHole(Vector2 worldPos, float radius)
         {
+            if (_isHeadlessRuntime) return;
             if (_maskTexture == null) return;
+
+            int holeBudget = Mathf.Max(1, _maxPendingHolesPerFrame);
+            if (_pendingHoles.Count >= holeBudget)
+            {
+                _droppedHoleStampCount++;
+                return;
+            }
 
             float u = (worldPos.x - _mapOffset) / _mapSize;
             float v = (worldPos.y - _mapOffset) / _mapSize;
@@ -168,7 +213,15 @@ namespace Tunnel
         /// </summary>
         public void EraseHole(Vector2 worldPos, float radius)
         {
+            if (_isHeadlessRuntime) return;
             if (_maskTexture == null) return;
+
+            int eraseBudget = Mathf.Max(1, _maxPendingErasesPerFrame);
+            if (_pendingErases.Count >= eraseBudget)
+            {
+                _droppedEraseStampCount++;
+                return;
+            }
 
             float u = (worldPos.x - _mapOffset) / _mapSize;
             float v = (worldPos.y - _mapOffset) / _mapSize;
@@ -179,6 +232,7 @@ namespace Tunnel
 
         private void LateUpdate()
         {
+            if (_isHeadlessRuntime) return;
             if (_pendingHoles.Count > 0)
             {
                 FlushHoles();
@@ -190,6 +244,8 @@ namespace Tunnel
                 FlushErases();
                 _pendingErases.Clear();
             }
+
+            MaybeLogStampBudgetDrops();
         }
 
         /// <summary>
@@ -256,6 +312,35 @@ namespace Tunnel
             GL.PopMatrix();
 
             RenderTexture.active = prev;
+        }
+
+        private int ResolveRuntimeMaskResolution()
+        {
+            int safeResolution = Mathf.Max(256, _textureResolution);
+            int runtimeCap = Mathf.Max(256, _runtimeMaxMaskResolution);
+            return Mathf.Min(safeResolution, runtimeCap);
+        }
+
+        private void MaybeLogStampBudgetDrops()
+        {
+            if (_droppedHoleStampCount <= 0 && _droppedEraseStampCount <= 0)
+                return;
+
+            if (!_logStampBudgetDrops)
+            {
+                _droppedHoleStampCount = 0;
+                _droppedEraseStampCount = 0;
+                return;
+            }
+
+            if (Time.unscaledTime < _nextStampBudgetLogAt)
+                return;
+
+            _nextStampBudgetLogAt = Time.unscaledTime + STAMP_BUDGET_LOG_INTERVAL_SECONDS;
+            Debug.LogWarning(
+                $"[TunnelMaskManager] Stamp budget capped: droppedHoles={_droppedHoleStampCount}, droppedErases={_droppedEraseStampCount}, holeBudget={_maxPendingHolesPerFrame}, eraseBudget={_maxPendingErasesPerFrame}");
+            _droppedHoleStampCount = 0;
+            _droppedEraseStampCount = 0;
         }
     }
 }

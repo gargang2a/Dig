@@ -1540,7 +1540,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: DIG WAR
+  m_text: DIG CLASH
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: dc36b3fdc14f47ebb36fd484a67e268a, type: 2}
   m_sharedMaterial: {fileID: 2140032, guid: dc36b3fdc14f47ebb36fd484a67e268a, type: 2}
@@ -1573,7 +1573,7 @@ MonoBehaviour:
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
   m_fontSizeMax: 72
-  m_fontStyle: 1
+  m_fontStyle: 0
   m_HorizontalAlignment: 2
   m_VerticalAlignment: 512
   m_textAlignment: 65535
@@ -1902,7 +1902,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _sandwormPrefab: {fileID: 232078583430665107, guid: 69c48b975478de04f9f53e94baf29680, type: 3}
-  _sandwormCount: 10
+  _sandwormCount: 2
   _spawnDelay: 5
 --- !u!1 &327080196
 GameObject:
@@ -6066,7 +6066,7 @@ MonoBehaviour:
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
   m_fontSizeMax: 72
-  m_fontStyle: 1
+  m_fontStyle: 0
   m_HorizontalAlignment: 2
   m_VerticalAlignment: 512
   m_textAlignment: 65535
@@ -6269,6 +6269,10 @@ MonoBehaviour:
   _brushShader: {fileID: 4800000, guid: b72c28689f5562c4e8a042e7de627110, type: 3}
   _eraserShader: {fileID: 0}
   _floorTexture: {fileID: 2800000, guid: 0bebfe06d4716804a9dc0c0a082791f6, type: 3}
+  _runtimeMaxMaskResolution: 1024
+  _maxPendingHolesPerFrame: 256
+  _maxPendingErasesPerFrame: 256
+  _logStampBudgetDrops: 0
   _floorColor: {r: 1, g: 1, b: 1, a: 1}
   _edgeColor: {r: 0.3, g: 0.2, b: 0.1, a: 1}
   _useWorldSpaceFloor: 1
@@ -7176,6 +7180,7 @@ MonoBehaviour:
   _maxPlayers: 24
   _botCount: 5
   _enableAutoStart: 1
+  _forceEditorClientMode: 1
   _editorOriginalMode: 1
   _editorCloneMode: 2
   _buildMode: 2
@@ -7257,6 +7262,7 @@ MonoBehaviour:
   _botCount: 8
   _autoRespawnBots: 1
   _respawnCheckInterval: 0.5
+  _maxTrimPerCheck: 8
   _botSprite: {fileID: 21300000, guid: 619d45642e3f9c447b432b5a5bd2c2ed, type: 3}
 --- !u!1 &1734165274
 GameObject:

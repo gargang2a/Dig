@@ -40,6 +40,8 @@ function New-MarkdownReport {
     $lines.Add("- ServerPid: $($Result.serverPid)")
     $lines.Add("- Port: $($Result.port)")
     $lines.Add("- PortOpen: $($Result.portOpen)")
+    $lines.Add("- PortOwnedByServerPid: $($Result.portOwnedByServerPid)")
+    $lines.Add("- ListenerProcessIds: $($Result.listenerProcessIds)")
     $lines.Add("- LocalEndpoint: $($Result.localEndpoint)")
     $lines.Add("- UnityLogPath: $($Result.unityLogPath)")
     $lines.Add("- StdOutPath: $($Result.stdoutPath)")
@@ -202,11 +204,20 @@ $proc = Start-Process -FilePath $serverBuildPathAbs `
 Start-Sleep -Seconds ([Math]::Max(1, $StartupWaitSeconds))
 
 $portOpen = $false
+$listenerProcessIds = @()
+$portOwnedByServerPid = $false
 try {
-    $probe = Test-NetConnection -ComputerName "127.0.0.1" -Port $Port -WarningAction SilentlyContinue
-    $portOpen = [bool]$probe.TcpTestSucceeded
+    $listeners = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
+    if ($listeners) {
+        $listenerProcessIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+    }
+
+    $portOpen = $listenerProcessIds.Count -gt 0
+    $portOwnedByServerPid = $listenerProcessIds -contains $proc.Id
 } catch {
     $portOpen = $false
+    $listenerProcessIds = @()
+    $portOwnedByServerPid = $false
 }
 
 $notes = New-Object System.Collections.Generic.List[string]
@@ -216,14 +227,19 @@ foreach ($layoutNote in $layoutNotes) {
 if (-not $portOpen) {
     $notes.Add("Port check failed. Verify server boot log and transport settings.")
 }
+if ($portOpen -and -not $portOwnedByServerPid) {
+    $notes.Add("Port $Port is occupied by another process. Started PID $($proc.Id) does not own the listener. ListenerPids=$($listenerProcessIds -join ',').")
+}
 
 $result = [ordered]@{
     createdAtUtc   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    status         = if ($portOpen) { "PASS" } else { "CHECK" }
+    status         = if ($portOpen -and $portOwnedByServerPid) { "PASS" } else { "CHECK" }
     serverBuildPath = $serverBuildPathAbs
     serverPid      = $proc.Id
     port           = $Port
     portOpen       = $portOpen
+    portOwnedByServerPid = $portOwnedByServerPid
+    listenerProcessIds = if ($listenerProcessIds.Count -gt 0) { $listenerProcessIds -join "," } else { "" }
     localEndpoint  = "127.0.0.1:$Port"
     unityLogPath   = $unityLogPath
     stdoutPath     = $stdoutPath

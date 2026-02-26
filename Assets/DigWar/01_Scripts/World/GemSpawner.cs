@@ -1,4 +1,5 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using Mirror;
 using Core;
@@ -26,6 +27,7 @@ namespace World
         private Transform _playerTransform;
         private int _activeGemCount;
         private float _nextSinglePlayerLookupAt;
+        private float _nextSpawnCenterWarningAt;
 
         private const uint GEM_ASSET_ID = 10003;
         private static bool IsNetworkMode => NetworkClient.active || NetworkServer.active;
@@ -110,13 +112,26 @@ namespace World
         {
             if (IsNetworkMode)
             {
+                // Dedicated Server에서는 ActivePlayers 레지스트리 타이밍 이슈가
+                // 있을 수 있어 spawned 테이블 스캔을 1순위로 사용한다.
+                if (NetworkServer.active)
+                {
+                    Transform spawnedTarget = ResolveSpawnCenterFromServerSpawned();
+                    if (spawnedTarget != null)
+                        return spawnedTarget;
+                }
+
                 int liveCount = 0;
                 foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
                 {
                     if (np != null) liveCount++;
                 }
 
-                if (liveCount == 0) return null;
+                if (liveCount == 0)
+                {
+                    LogSpawnCenterMissingIfNeeded();
+                    return null;
+                }
 
                 int target = Random.Range(0, liveCount);
                 foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
@@ -138,6 +153,71 @@ namespace World
 
             var player = FindObjectOfType<PlayerController>();
             return player != null ? player.transform : null;
+        }
+
+        private Transform ResolveSpawnCenterFromServerSpawned()
+        {
+            int liveCount = 0;
+            foreach (KeyValuePair<uint, NetworkIdentity> pair in NetworkServer.spawned)
+            {
+                NetworkIdentity identity = pair.Value;
+                if (identity == null) continue;
+
+                Network.NetworkPlayer player = identity.GetComponent<Network.NetworkPlayer>();
+                if (player == null || player.IsDead) continue;
+                liveCount++;
+            }
+
+            if (liveCount == 0)
+            {
+                LogSpawnCenterMissingIfNeeded();
+                return null;
+            }
+
+            int target = Random.Range(0, liveCount);
+            foreach (KeyValuePair<uint, NetworkIdentity> pair in NetworkServer.spawned)
+            {
+                NetworkIdentity identity = pair.Value;
+                if (identity == null) continue;
+
+                Network.NetworkPlayer player = identity.GetComponent<Network.NetworkPlayer>();
+                if (player == null || player.IsDead) continue;
+
+                if (target == 0)
+                    return player.transform;
+
+                target--;
+            }
+
+            return null;
+        }
+
+        private void LogSpawnCenterMissingIfNeeded()
+        {
+            if (!NetworkServer.active || Time.unscaledTime < _nextSpawnCenterWarningAt)
+                return;
+
+            _nextSpawnCenterWarningAt = Time.unscaledTime + 5f;
+
+            int activePlayers = 0;
+            foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
+            {
+                if (np != null) activePlayers++;
+            }
+
+            int spawnedPlayers = 0;
+            foreach (KeyValuePair<uint, NetworkIdentity> pair in NetworkServer.spawned)
+            {
+                NetworkIdentity identity = pair.Value;
+                if (identity == null) continue;
+                if (identity.GetComponent<Network.NetworkPlayer>() == null) continue;
+                spawnedPlayers++;
+            }
+
+            Debug.LogWarning(
+                "[GemSpawner] spawn center unavailable: " +
+                $"activePlayers={activePlayers}, spawnedPlayers={spawnedPlayers}, " +
+                $"isGameActive={GameManager.Instance != null && GameManager.Instance.IsGameActive}");
         }
 
         private void SpawnGem()
@@ -258,5 +338,4 @@ namespace World
         }
     }
 }
-
 

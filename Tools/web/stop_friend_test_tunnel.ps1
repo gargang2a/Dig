@@ -17,18 +17,18 @@ function Resolve-AbsolutePath {
 }
 
 function Stop-ByProcessId {
-    param([Parameter(Mandatory = $true)][int]$Pid)
+    param([Parameter(Mandatory = $true)][int]$TargetProcessId)
 
-    if ($Pid -le 0) {
+    if ($TargetProcessId -le 0) {
         return $false
     }
 
-    $proc = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+    $proc = Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue
     if ($null -eq $proc) {
         return $false
     }
 
-    Stop-Process -Id $Pid -Force
+    Stop-Process -Id $TargetProcessId -Force
     return $true
 }
 
@@ -46,7 +46,7 @@ if ($StopAllCloudflared) {
 }
 
 if ($ProcessId -gt 0) {
-    if (Stop-ByProcessId -Pid $ProcessId) {
+    if (Stop-ByProcessId -TargetProcessId $ProcessId) {
         Write-Host "[Tunnel] Stopped process id: $ProcessId"
         exit 0
     }
@@ -67,7 +67,7 @@ if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
     }
 
     $pidFromReport = [int]$json.cloudflaredPid
-    if (Stop-ByProcessId -Pid $pidFromReport) {
+    if (Stop-ByProcessId -TargetProcessId $pidFromReport) {
         Write-Host "[Tunnel] Stopped process id from report: $pidFromReport"
         exit 0
     }

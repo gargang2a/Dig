@@ -73,8 +73,11 @@ namespace Network
         [SerializeField] private bool _enableAutoStart = true;
 
 #if UNITY_EDITOR
+        [Tooltip("로컬 QA에서는 원본/클론 에디터를 모두 Client로 강제해 Host 부하를 분리")]
+        [SerializeField] private bool _forceEditorClientMode = true;
+
         [Tooltip("에디터 원본 인스턴스 시작 모드")]
-        [SerializeField] private AutoStartMode _editorOriginalMode = AutoStartMode.Host;
+        [SerializeField] private AutoStartMode _editorOriginalMode = AutoStartMode.Client;
 
         [Tooltip("ParrelSync Clone 인스턴스 시작 모드")]
         [SerializeField] private AutoStartMode _editorCloneMode = AutoStartMode.Client;
@@ -176,6 +179,13 @@ namespace Network
         {
 #if UNITY_EDITOR
             isCloneInstance = IsEditorCloneInstance();
+
+            if (_forceEditorClientMode)
+            {
+                contextLabel = isCloneInstance ? "EditorClone(ForcedClient)" : "EditorOriginal(ForcedClient)";
+                return AutoStartMode.Client;
+            }
+
             contextLabel = isCloneInstance ? "EditorClone" : "EditorOriginal";
             return isCloneInstance ? _editorCloneMode : _editorOriginalMode;
 #else

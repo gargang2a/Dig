@@ -2,6 +2,7 @@
 using Mirror;
 using Core;
 using Core.Data;
+using System.Collections.Generic;
 
 namespace Player
 {
@@ -18,6 +19,9 @@ namespace Player
     /// </summary>
     public class BotSpawner : MonoBehaviour
     {
+        private static BotSpawner _serverOwner;
+        private const int FREE_MVP_BOT_HARD_CAP = 12;
+
         [Header("봇 설정")]
         [Tooltip("Number of bots to spawn")]
         [SerializeField] private int _botCount = 3;
@@ -27,13 +31,18 @@ namespace Player
 
         [Tooltip("봇 개수 보정 주기(초)")]
         [SerializeField] private float _respawnCheckInterval = 0.5f;
+        [Tooltip("보정 주기당 초과 봇 정리 최대 개수")]
+        [SerializeField] private int _maxTrimPerCheck = 8;
 
         [Tooltip("Bot sprite")]
         [SerializeField] private Sprite _botSprite;
 
         private GameSettings _settings;
-        private int _nextBotIndex;
+        private int _nextBotIndexCursor;
+        private int _runtimeTargetBotCount;
         private float _nextRespawnCheckAt;
+        private readonly List<Network.NetworkBot> _activeServerBotSnapshot = new List<Network.NetworkBot>(32);
+        private readonly bool[] _botIndexSlotUsed = new bool[FREE_MVP_BOT_HARD_CAP];
 
         // 봇 전용 assetId (Mirror가 스폰 핸들러를 식별하는 키)
         private const uint BOT_ASSET_ID = 10001;
@@ -50,6 +59,9 @@ namespace Player
 
         private void OnDestroy()
         {
+            if (_serverOwner == this)
+                _serverOwner = null;
+
             NetworkClient.UnregisterSpawnHandler(BOT_ASSET_ID);
         }
 
@@ -62,14 +74,29 @@ namespace Player
                 return;
             }
 
+            if (_serverOwner != null && _serverOwner != this)
+            {
+                Debug.LogWarning("[BotSpawner] Duplicate server spawner detected. Disabling this instance.");
+                enabled = false;
+                return;
+            }
+
+            _serverOwner = this;
+
             if (GameManager.Instance == null) return;
             _settings = GameManager.Instance.Settings;
-            _nextBotIndex = 0;
+            _runtimeTargetBotCount = ResolveRuntimeTargetBotCount();
 
-            for (int i = 0; i < _botCount; i++)
-                SpawnBot(_nextBotIndex++);
+            // 전용 서버 재시작/씬 재초기화 경로에서 잔여 봇이 남아 있으면 먼저 정리해
+            // 초기 과증식 상태로 진입하지 않도록 방어한다.
+            TrimAllServerBots();
 
-            Debug.Log($"[BotSpawner] 서버에서 봇 {_botCount}마리 네트워크 스폰 완료");
+            _nextBotIndexCursor = 0;
+
+            for (int i = 0; i < _runtimeTargetBotCount; i++)
+                SpawnBot(i);
+
+            Debug.Log($"[BotSpawner] 서버에서 봇 {_runtimeTargetBotCount}마리 네트워크 스폰 완료");
         }
 
         private void Update()
@@ -79,17 +106,117 @@ namespace Player
 
             _nextRespawnCheckAt = Time.time + Mathf.Max(0.1f, _respawnCheckInterval);
 
-            int activeServerBots = 0;
-            foreach (Network.NetworkBot bot in Network.NetworkBot.ActiveBots)
+            CaptureServerBots();
+
+            int overflow = _activeServerBotSnapshot.Count - _runtimeTargetBotCount;
+            if (overflow > 0)
             {
-                if (bot == null) continue;
-                if (!bot.isServer) continue;
-                activeServerBots++;
+                int trimLimit = Mathf.Max(1, _maxTrimPerCheck);
+                int trimCount = Mathf.Min(overflow, trimLimit);
+
+                for (int i = 0; i < trimCount; i++)
+                {
+                    int index = _activeServerBotSnapshot.Count - 1 - i;
+                    if (index < 0) break;
+
+                    Network.NetworkBot bot = _activeServerBotSnapshot[index];
+                    if (bot == null) continue;
+                    if (bot.gameObject == null) continue;
+                    if (!bot.gameObject.activeInHierarchy) continue;
+
+                    NetworkServer.Destroy(bot.gameObject);
+                }
+
+                return;
             }
 
-            int deficit = _botCount - activeServerBots;
+            int deficit = _runtimeTargetBotCount - _activeServerBotSnapshot.Count;
             for (int i = 0; i < deficit; i++)
-                SpawnBot(_nextBotIndex++);
+            {
+                int botIndex = ResolveNextBotIndex();
+                SpawnBot(botIndex);
+                CaptureServerBots();
+            }
+        }
+
+        private int ResolveRuntimeTargetBotCount()
+        {
+            int safeCount = Mathf.Max(0, _botCount);
+            if (!NetworkServer.active)
+                return safeCount;
+
+            int clamped = Mathf.Min(safeCount, FREE_MVP_BOT_HARD_CAP);
+            if (safeCount != clamped)
+            {
+                Debug.LogWarning(
+                    $"[BotSpawner] Enforcing Free-MVP bot cap: {safeCount} -> {clamped}");
+            }
+
+            return clamped;
+        }
+
+        private void CaptureServerBots()
+        {
+            _activeServerBotSnapshot.Clear();
+
+            if (NetworkServer.spawned == null || NetworkServer.spawned.Count == 0)
+                return;
+
+            foreach (NetworkIdentity identity in NetworkServer.spawned.Values)
+            {
+                if (identity == null) continue;
+
+                Network.NetworkBot bot = identity.GetComponent<Network.NetworkBot>();
+                if (bot == null) continue;
+
+                _activeServerBotSnapshot.Add(bot);
+            }
+        }
+
+        private void TrimAllServerBots()
+        {
+            CaptureServerBots();
+            for (int i = 0; i < _activeServerBotSnapshot.Count; i++)
+            {
+                Network.NetworkBot bot = _activeServerBotSnapshot[i];
+                if (bot == null) continue;
+                if (bot.gameObject == null) continue;
+
+                NetworkServer.Destroy(bot.gameObject);
+            }
+        }
+
+        private int ResolveNextBotIndex()
+        {
+            int slotCount = Mathf.Clamp(_runtimeTargetBotCount, 1, FREE_MVP_BOT_HARD_CAP);
+
+            for (int i = 0; i < slotCount; i++)
+                _botIndexSlotUsed[i] = false;
+
+            for (int i = 0; i < _activeServerBotSnapshot.Count; i++)
+            {
+                Network.NetworkBot bot = _activeServerBotSnapshot[i];
+                if (bot == null) continue;
+
+                int index = bot.BotIndex;
+                if (index < 0 || index >= slotCount) continue;
+
+                _botIndexSlotUsed[index] = true;
+            }
+
+            for (int offset = 0; offset < slotCount; offset++)
+            {
+                int candidate = (_nextBotIndexCursor + offset) % slotCount;
+                if (_botIndexSlotUsed[candidate]) continue;
+
+                _nextBotIndexCursor = (candidate + 1) % slotCount;
+                return candidate;
+            }
+
+            // 모두 사용 중인 경우(예: 타이밍 이슈)에도 인덱스가 급증하지 않도록 슬롯 범위 내에서 순환.
+            int fallback = _nextBotIndexCursor;
+            _nextBotIndexCursor = (_nextBotIndexCursor + 1) % slotCount;
+            return fallback;
         }
 
         /// <summary>서버에서 봇을 조립하고 네트워크 스폰한다.</summary>
@@ -101,11 +228,12 @@ namespace Player
             var networkBot = botObj.GetComponent<Network.NetworkBot>();
             networkBot.BotIndex = index;
 
+            // 비활성 오브젝트 스폰 경로에서 서버 생명주기 콜백 누락이 발생하면
+            // ActiveBots 집계/보충 루프가 어긋날 수 있어, 스폰 직전 활성화한다.
+            botObj.SetActive(true);
+
             // 네트워크 스폰 → 클라이언트에 전파
             NetworkServer.Spawn(botObj, BOT_ASSET_ID);
-
-            // 스폰 후 활성화 (NetworkTransformReliable NullRef 방지)
-            botObj.SetActive(true);
         }
 
         /// <summary>봇 GameObject를 조립한다.</summary>
@@ -219,3 +347,4 @@ namespace Player
         }
     }
 }
+

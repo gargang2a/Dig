@@ -87,6 +87,7 @@ namespace Network
         public override void OnStartServer()
         {
             base.OnStartServer();
+            _activePlayers.Add(this);
             _nextKillRequestAllowedAt = 0f;
             _syncedScale = ResolveScaleFromScore(Score);
             _lastServerPosition = transform.position;
@@ -121,6 +122,12 @@ namespace Network
                     $"reportedMaxBot={MAX_CLIENT_REPORTED_BOT_KILL_DISTANCE:F2}, " +
                     $"reportedMaxPlayer={MAX_CLIENT_REPORTED_PLAYER_KILL_DISTANCE:F2}");
             }
+        }
+
+        public override void OnStopServer()
+        {
+            _activePlayers.Remove(this);
+            base.OnStopServer();
         }
 
         public override void OnStartClient()

@@ -24,6 +24,8 @@ namespace Core
 
         // 샌드웜 전용 assetId
         private const uint SANDWORM_ASSET_ID = 10002;
+        private const int FREE_MVP_SANDWORM_HARD_CAP = 3;
+        private bool _spawnScheduled;
 
         private void Awake()
         {
@@ -52,34 +54,55 @@ namespace Core
         {
             if (GameManager.Instance != null)
                 GameManager.Instance.OnGameStarted += OnGameStarted;
+
+            // 전용 서버 자동 시작 경로에서 GameStarted 이벤트보다 늦게 Start가 호출될 수 있다.
+            // 이미 게임이 활성화된 상태면 즉시 스폰 예약을 보장한다.
+            if (NetworkServer.active && GameManager.Instance != null && GameManager.Instance.IsGameActive)
+                ScheduleSpawnIfNeeded();
         }
 
         private void OnDisable()
         {
             if (GameManager.Instance != null)
                 GameManager.Instance.OnGameStarted -= OnGameStarted;
+
+            if (_spawnScheduled)
+            {
+                CancelInvoke(nameof(SpawnSandworms));
+                _spawnScheduled = false;
+            }
         }
 
         private void OnGameStarted()
         {
             // 서버에서만 샌드웜 스폰
             if (!NetworkServer.active) return;
+            ScheduleSpawnIfNeeded();
+        }
+
+        private void ScheduleSpawnIfNeeded()
+        {
+            if (_spawnScheduled) return;
+            _spawnScheduled = true;
             Invoke(nameof(SpawnSandworms), _spawnDelay);
         }
 
         private void SpawnSandworms()
         {
+            _spawnScheduled = false;
+
             if (_sandwormPrefab == null)
             {
                 Debug.LogWarning("[SandwormManager] Sandworm prefab is not assigned.");
                 return;
             }
 
-            float mapRadius = 50f;
+            float mapRadius = 65f;
             if (GameManager.Instance != null && GameManager.Instance.Settings != null)
                 mapRadius = GameManager.Instance.Settings.MapRadius;
 
-            for (int i = 0; i < _sandwormCount; i++)
+            int spawnCount = ResolveSpawnCount();
+            for (int i = 0; i < spawnCount; i++)
             {
                 float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
                 Vector2 spawnPos = new Vector2(
@@ -114,6 +137,22 @@ namespace Core
 
                 Debug.Log($"[SandwormManager] Spawned Sandworm_{i} at {spawnPos}");
             }
+        }
+
+        private int ResolveSpawnCount()
+        {
+            int safeCount = Mathf.Max(0, _sandwormCount);
+            if (!NetworkServer.active)
+                return safeCount;
+
+            int clamped = Mathf.Min(safeCount, FREE_MVP_SANDWORM_HARD_CAP);
+            if (safeCount != clamped)
+            {
+                Debug.LogWarning(
+                    $"[SandwormManager] Enforcing Free-MVP sandworm cap: {safeCount} -> {clamped}");
+            }
+
+            return clamped;
         }
 
         // === 클라이언트 스폰 핸들러 ===

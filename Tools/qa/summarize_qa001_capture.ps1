@@ -166,6 +166,10 @@ $playerVsPlayerEvidenceCount = Count-PlayerVsPlayerEvidence -Lines $networkLines
 $cloneFallbackFromHostConn = if ($hostKpiConnGe2Count -gt 0 -or $hostKpiPlayersGe2Count -gt 0) { 1 } else { 0 }
 $cloneFallbackFromPvp = if ($playerVsPlayerEvidenceCount -gt 0) { 1 } else { 0 }
 
+$hasClientArtifacts = (@($clientNetwork).Count + @($clientErrors).Count + @($clientWarnings).Count + @($clientKpi).Count) -gt 0
+$hasEditorContextEvidence = ($hostContextCount + $cloneContextCount + $hostKpiModeCount + $clientKpiModeCount) -gt 0
+$serverOnlyCapture = (-not $hasClientArtifacts -and -not $hasEditorContextEvidence -and $serverStartedCount -gt 0)
+
 $effectiveHostContextCount = $hostContextCount + $hostKpiModeCount
 $effectiveCloneContextCount = $cloneContextCount + $clientKpiModeCount + $cloneFallbackFromHostConn + $cloneFallbackFromPvp
 $effectiveServerStartedCount = if ($serverStartedCount -gt 0) { $serverStartedCount } else { $cap24EvidenceCount }
@@ -184,6 +188,7 @@ $pvpKillCount = Count-Match -Lines $networkLines -Pattern "\[PvP\].*(Kill|처치
 $ignoredErrorPatterns = @(
     "EditorUpdateCheck: Failed",
     "\[Licensing::Module\]",
+    "^ERROR:\s+Shader\s+.+\s+is not supported on this GPU\s+\(none of subshaders/fallbacks are suitable\)$",
     "TcpMessagingSession\s*-\s*receive error:\s*operation aborted",
     "Server Transport Error for connId=\d+:\s*Unexpected:\s*Unable to read data from the transport connection",
     "\[Network\]\s*Server transport error observed:\s*connId=\d+,\s*error=Unexpected,\s*reason=Unable to read data from the transport connection",
@@ -206,6 +211,22 @@ $nonEmptyErrorCount = $nonEmptyErrorLines.Count
 $ignoredErrorCount = @($errorLines).Count - $nonEmptyErrorCount
 $nonEmptyWarningCount = @($warningLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
 
+$joinContextStatus = "AUTO_FAIL"
+$joinContextEvidence = "localhost=$localhostConnectCount, hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi+fallback/effective)=$cloneContextCount/$clientKpiModeCount+($cloneFallbackFromHostConn,$cloneFallbackFromPvp)/$effectiveCloneContextCount"
+$net005Status = "AUTO_FAIL"
+$net005Evidence = "hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi+fallback/effective)=$cloneContextCount/$clientKpiModeCount+($cloneFallbackFromHostConn,$cloneFallbackFromPvp)/$effectiveCloneContextCount"
+
+if ($serverOnlyCapture) {
+    $joinContextStatus = "AUTO_SKIP"
+    $joinContextEvidence = "server-only capture (no client/editor context artifacts)"
+    $net005Status = "AUTO_SKIP"
+    $net005Evidence = "server-only capture (NET-005 editor auto-start context not applicable)"
+}
+elseif ($localhostConnectCount -gt 0 -and $effectiveHostContextCount -gt 0 -and $effectiveCloneContextCount -gt 0) {
+    $joinContextStatus = "AUTO_PASS"
+    $net005Status = "AUTO_PASS"
+}
+
 $autoRows = @(
     @{
         Item = "2) Pre-check: Console errors should be zero"
@@ -214,13 +235,13 @@ $autoRows = @(
     },
     @{
         Item = "2) Pre-check: Host/Client localhost join + context logs"
-        Status = Status-FromCondition ($localhostConnectCount -gt 0 -and $effectiveHostContextCount -gt 0 -and $effectiveCloneContextCount -gt 0)
-        Evidence = "localhost=$localhostConnectCount, hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi+fallback/effective)=$cloneContextCount/$clientKpiModeCount+($cloneFallbackFromHostConn,$cloneFallbackFromPvp)/$effectiveCloneContextCount"
+        Status = $joinContextStatus
+        Evidence = $joinContextEvidence
     },
     @{
         Item = "7) NET-005: Original/Clone AutoStart policy logs"
-        Status = Status-FromCondition ($effectiveHostContextCount -gt 0 -and $effectiveCloneContextCount -gt 0)
-        Evidence = "hostContext(raw/kpi/effective)=$hostContextCount/$hostKpiModeCount/$effectiveHostContextCount, cloneContext(raw/kpi+fallback/effective)=$cloneContextCount/$clientKpiModeCount+($cloneFallbackFromHostConn,$cloneFallbackFromPvp)/$effectiveCloneContextCount"
+        Status = $net005Status
+        Evidence = $net005Evidence
     },
     @{
         Item = "14) SVC-004: MaxConnections=24 applied"

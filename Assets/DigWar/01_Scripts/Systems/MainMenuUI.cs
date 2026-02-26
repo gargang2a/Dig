@@ -4,6 +4,7 @@ using TMPro;
 using Core;
 using Network;
 using Mirror;
+using UnityEngine.Rendering;
 
 namespace Systems
 {
@@ -21,6 +22,7 @@ namespace Systems
 
         private bool _retryConnectPending;
         private bool _startRequestedWhileConnecting;
+        private bool _isHeadlessRuntime;
 
         private void OnEnable()
         {
@@ -34,6 +36,19 @@ namespace Systems
 
         private void Start()
         {
+            _isHeadlessRuntime = Application.isBatchMode || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null;
+            if (_isHeadlessRuntime)
+            {
+                // Dedicated Server / Headless runtime:
+                // UI flow does not apply and Time.timeScale must remain 1 for server simulation.
+                if (_panel != null)
+                    _panel.SetActive(false);
+
+                Time.timeScale = 1f;
+                enabled = false;
+                return;
+            }
+
             if (_panel == null)
             {
                 Debug.LogWarning("[MainMenuUI] UI References are missing! Please assign them in the Inspector.");

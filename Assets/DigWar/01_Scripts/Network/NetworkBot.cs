@@ -55,6 +55,7 @@ namespace Network
         public override void OnStartServer()
         {
             base.OnStartServer();
+            _activeBots.Add(this);
             _ai = GetComponent<Player.AIController>();
             _settings = Core.GameManager.Instance?.Settings;
 
@@ -63,6 +64,12 @@ namespace Network
 
             Score = SanitizeScore(_ai != null ? _ai.Score : Score);
             _syncedScale = ResolveScaleFromScore(Score);
+        }
+
+        public override void OnStopServer()
+        {
+            _activeBots.Remove(this);
+            base.OnStopServer();
         }
 
         public override void OnStartClient()
@@ -96,6 +103,11 @@ namespace Network
         {
             _activeBots.Remove(this);
             base.OnStopClient();
+        }
+
+        private void OnDestroy()
+        {
+            _activeBots.Remove(this);
         }
 
         private void Update()

@@ -92,7 +92,7 @@ namespace World
             if (GameManager.Instance != null && GameManager.Instance.Settings != null)
                 _mapRadius = GameManager.Instance.Settings.MapRadius;
             else
-                _mapRadius = 50f;
+                _mapRadius = 65f;
 
             _targetAngle = Random.Range(0f, 360f);
             _dirChangeTimer = _dirChangeInterval;

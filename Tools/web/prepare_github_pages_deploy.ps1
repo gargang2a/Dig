@@ -4,6 +4,7 @@ param(
     [string]$OutputDir = ".\build\github-pages",
     [string]$RemoteName = "origin",
     [string]$SiteSubPath = "",
+    [string]$CustomDomain = "",
     [switch]$SkipValidation
 )
 
@@ -105,6 +106,16 @@ function Normalize-SubPath {
     return $Path.Trim().Trim('/')
 }
 
+function Normalize-CustomDomain {
+    param([string]$Domain)
+
+    if ([string]::IsNullOrWhiteSpace($Domain)) {
+        return ""
+    }
+
+    return $Domain.Trim().Trim('/').ToLowerInvariant()
+}
+
 $releasePathAbs = Resolve-AbsolutePath -Path $ReleasePath
 if (-not (Test-Path -LiteralPath $releasePathAbs)) {
     throw "[Prepare] ReleasePath not found: $releasePathAbs"
@@ -155,6 +166,7 @@ if (-not $SkipValidation) {
 }
 
 $normalizedSubPath = Normalize-SubPath -Path $SiteSubPath
+$normalizedCustomDomain = Normalize-CustomDomain -Domain $CustomDomain
 
 $stageRoot = Join-Path $outputDirAbs "staging"
 $stageCurrent = Join-Path $stageRoot "current"
@@ -177,6 +189,11 @@ Copy-Item -Path (Join-Path $webGlRoot "*") -Destination $stageVersion -Recurse -
 
 New-Item -Path (Join-Path $stageCurrent ".nojekyll") -ItemType File -Force | Out-Null
 New-Item -Path (Join-Path $stageVersion ".nojekyll") -ItemType File -Force | Out-Null
+
+if (-not [string]::IsNullOrWhiteSpace($normalizedCustomDomain)) {
+    Set-Content -LiteralPath (Join-Path $stageCurrent "CNAME") -Value $normalizedCustomDomain -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $stageVersion "CNAME") -Value $normalizedCustomDomain -Encoding ASCII
+}
 
 $remoteUrl = $null
 try {
@@ -205,6 +222,7 @@ $guideLines.Add("- SourceInput: $sourceInput")
 $guideLines.Add("- StageCurrent: $stageCurrent")
 $guideLines.Add("- StageVersion: $stageVersion")
 $guideLines.Add("- PagesTargetPath: $pagesTargetPath")
+$guideLines.Add("- CustomDomain: " + ($(if ($normalizedCustomDomain) { $normalizedCustomDomain } else { "N/A" })))
 $guideLines.Add("- ExpectedPagesUrl: " + ($(if ($expectedUrl) { $expectedUrl } else { "N/A (non-GitHub remote or parse failed)" })))
 $guideLines.Add("")
 $guideLines.Add("## Deploy Commands (Manual)")
@@ -222,6 +240,9 @@ $guideLines.Add("git fetch $RemoteName")
 $guideLines.Add("git worktree add .\\build\\gh-pages-worktree $RemoteName/gh-pages")
 $guideLines.Add(('robocopy "{0}" "{1}" /MIR' -f $stageCurrent, $worktreeTarget))
 $guideLines.Add("New-Item -ItemType File -Path .\\build\\gh-pages-worktree\\.nojekyll -Force | Out-Null")
+if (-not [string]::IsNullOrWhiteSpace($normalizedCustomDomain)) {
+    $guideLines.Add(('Set-Content -Path .\\build\\gh-pages-worktree\\CNAME -Value "{0}" -Encoding ASCII' -f $normalizedCustomDomain))
+}
 $guideLines.Add("Set-Location .\\build\\gh-pages-worktree")
 $guideLines.Add("git add .")
 $guideLines.Add(('git commit -m "Deploy WebGL release {0}"' -f $releaseTag))
@@ -241,6 +262,7 @@ $deployMeta = [ordered]@{
     stageCurrent    = $stageCurrent
     stageVersion    = $stageVersion
     pagesTargetPath = $pagesTargetPath
+    customDomain    = $normalizedCustomDomain
     expectedPagesUrl = $expectedUrl
     deployGuidePath = $deployGuidePath
 }

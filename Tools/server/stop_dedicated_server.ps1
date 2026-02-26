@@ -16,19 +16,19 @@ function Resolve-AbsolutePath {
     return [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $Path))
 }
 
-function Stop-ByPid {
-    param([Parameter(Mandatory = $true)][int]$Pid)
+function Stop-ByProcessId {
+    param([Parameter(Mandatory = $true)][int]$TargetProcessId)
 
-    if ($Pid -le 0) {
+    if ($TargetProcessId -le 0) {
         return $false
     }
 
-    $proc = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+    $proc = Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue
     if ($null -eq $proc) {
         return $false
     }
 
-    Stop-Process -Id $Pid -Force
+    Stop-Process -Id $TargetProcessId -Force
     return $true
 }
 
@@ -57,7 +57,7 @@ if ($StopAllByName) {
 }
 
 if ($ProcessId -gt 0) {
-    if (Stop-ByPid -Pid $ProcessId) {
+    if (Stop-ByProcessId -TargetProcessId $ProcessId) {
         Write-Host "[Server] Stopped process id: $ProcessId"
         exit 0
     }
@@ -78,7 +78,7 @@ if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
     }
 
     $pidFromReport = [int]$report.serverPid
-    if (Stop-ByPid -Pid $pidFromReport) {
+    if (Stop-ByProcessId -TargetProcessId $pidFromReport) {
         Write-Host "[Server] Stopped process id from report: $pidFromReport"
         exit 0
     }
