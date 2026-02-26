@@ -31,6 +31,17 @@ html, body {
   height: 100vh !important;
 }
 
+#unity-container.unity-desktop {
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  transform: none !important;
+}
+
+#unity-canvas {
+  display: block !important;
+}
+
 #unity-loading-bar,
 #unity-logo,
 #unity-progress-bar-empty,
