@@ -147,15 +147,11 @@
                   footer.style.display = "none";
                 }
 
-                const requestFullscreen = () => {
-                  unityInstance.SetFullscreen(1);
-                };
-
+                // digwar-no-browser-fullscreen
+                // Keep immersive viewport layout (100vw/100vh), but do not force browser fullscreen.
                 if (fullscreenButton) {
-                  fullscreenButton.onclick = requestFullscreen;
+                  fullscreenButton.style.display = "none";
                 }
-
-                canvas.addEventListener("pointerdown", requestFullscreen, { once: true });
                             }).catch((message) => {
                 // digwar-load-error-fallback
                 var reason = (typeof message === "string") ? message : JSON.stringify(message);
