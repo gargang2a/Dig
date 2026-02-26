@@ -130,20 +130,11 @@
 
 
       } else {
-        // Desktop style: fill the browser viewport for immersive play.
-        container.className = "unity-desktop";
-      }
+        // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
 
-      // digwar-immersive-mode
-      function applyImmersiveCanvasSize() {
-        container.style.width = "100vw";
-        container.style.height = "100vh";
-        canvas.style.width = "100vw";
-        canvas.style.height = "100vh";
+        canvas.style.width = "960px";
+        canvas.style.height = "600px";
       }
-
-      window.addEventListener("resize", applyImmersiveCanvasSize);
-      applyImmersiveCanvasSize();
 
             // digwar-clean-ui
       if (loadingBar) {
@@ -157,12 +148,7 @@
           progressBarFull.style.width = 100 * progress + "%";
               }).then((unityInstance) => {
                 loadingBar.style.display = "none";
-                if (footer) {
-                  footer.style.display = "none";
-                }
-
-                // digwar-no-browser-fullscreen
-                // Keep immersive viewport layout (100vw/100vh), but do not force browser fullscreen.
+                                // digwar-no-browser-fullscreen
                 if (fullscreenButton) {
                   fullscreenButton.style.display = "none";
                 }
