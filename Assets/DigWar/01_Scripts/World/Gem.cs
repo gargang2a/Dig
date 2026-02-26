@@ -6,9 +6,9 @@ using System.Collections.Generic;
 namespace World
 {
     /// <summary>
-    /// 맵에 생성되는 보석.
-    /// 유휴 상태에서 흔들리고, 플레이어 접근 시 빨려들어간다.
-    /// 충돌 시 점수를 부여하고 풀로 반환된다.
+    /// 맵에 ?�성?�는 보석.
+    /// ?�휴 ?�태?�서 ?�들리고, ?�레?�어 ?�근 ??빨려?�어간다.
+    /// 충돌 ???�수�?부?�하�??��?반환?�다.
     /// </summary>
     [RequireComponent(typeof(CircleCollider2D))]
     public class Gem : MonoBehaviour, IPoolable
@@ -24,35 +24,47 @@ namespace World
         private Transform _playerTransform;
         private bool _isNetworkManaged;
         private float _nextPlayerLookupAt;
+        private bool _predictedCollectVisualApplied;
+        private Coroutine _predictedCollectRestoreRoutine;
+        private Coroutine _pendingCollectRequestRoutine;
+        private Network.NetworkPlayer _localCollector;
+        private Collider2D _localCollectorCollider;
+        private float _nextLocalCollectorLookupAt;
+        private NetworkIdentity _networkIdentity;
+        private bool _serverCollected;
+        private const float PREDICTED_COLLECT_RESTORE_SECONDS = 0.35f;
+        private const float LOCAL_COLLECTOR_LOOKUP_INTERVAL = 0.25f;
+        private const float PREDICTED_COLLECT_MARGIN = 0.12f;
+        private const float FALLBACK_COLLIDER_RADIUS = 0.35f;
 
-        // Wobble (유휴 흔들림)
+        // Wobble (?�휴 ?�들�?
         private Vector3 _spawnPosition;
         private float _wobbleOffset;
         private const float WOBBLE_AMPLITUDE = 0.08f;
         private const float WOBBLE_SPEED = 3f;
 
-        // Glow (발광 펴싱)
+        // Glow (발광 ?�싱)
         private Color _baseColor;
         private float _glowOffset;
         private const float GLOW_SPEED = 5f;
-        private const float GLOW_INTENSITY = 4f; // HDR 배율 — URP Bloom threshold(0.8) 초과해야 빛남
+        private const float GLOW_INTENSITY = 4f; // HDR 배율 ??URP Bloom threshold(0.8) 초과?�야 빛남
 
-        // Magnet (자석 흡인)
+        // Magnet (?�석 ?�인)
         private bool _isMagnetized;
         private float _magnetSpeed;
         private float _targetScale;
 
-        // 랜덤 젼 색상 팔레트 (Slither.io 스타일)
+        // ?�덤 ???�상 ?�레??(Slither.io ?��???
         private static readonly Color[] GEM_COLORS = new Color[]
         {
             new Color(1f, 0.3f, 0.3f),   // 빨강
             new Color(0.3f, 1f, 0.3f),   // 초록
-            new Color(0.3f, 0.6f, 1f),   // 파랑
-            new Color(1f, 1f, 0.2f),     // 노랑
+            new Color(0.3f, 0.6f, 1f),   // ?�랑
+            new Color(1f, 1f, 0.2f),     // ?�랑
             new Color(1f, 0.5f, 0f),     // 주황
             new Color(0.8f, 0.3f, 1f),   // 보라
-            new Color(0f, 1f, 0.9f),     // 청록
-            new Color(1f, 0.4f, 0.7f),   // 핑크
+            new Color(0f, 1f, 0.9f),     // �?��
+            new Color(1f, 0.4f, 0.7f),   // ?�크
         };
     private static readonly int ColorId = Shader.PropertyToID("_Color");
 
@@ -61,6 +73,7 @@ namespace World
             _collider = GetComponent<CircleCollider2D>();
             _sr = GetComponent<SpriteRenderer>();
             _mpb = new MaterialPropertyBlock();
+            _networkIdentity = GetComponent<NetworkIdentity>();
         }
 
         private void OnEnable()
@@ -89,12 +102,17 @@ namespace World
 
         public void OnSpawn()
         {
+            ResetPredictedCollectVisual();
+            _localCollector = null;
+            _localCollectorCollider = null;
+            _nextLocalCollectorLookupAt = 0f;
+            _serverCollected = false;
+
             if (_collider != null)
                 _collider.enabled = true;
             InitializeVisualState(useDeterministicColor: false);
 
-            // 프리팹 스케일 기준으로 팝 애니메이션
-            if (_targetScale <= 0f)
+            // ?�리???��???기�??�로 ???�니메이??            if (_targetScale <= 0f)
                 _targetScale = transform.localScale.x;
             float startScale = _targetScale * 0.3f;
             transform.localScale = new Vector3(startScale, startScale, 1f);
@@ -102,6 +120,11 @@ namespace World
 
         public void OnDespawn()
         {
+            ResetPredictedCollectVisual();
+            _localCollector = null;
+            _localCollectorCollider = null;
+            _serverCollected = false;
+
             if (_collider != null)
                 _collider.enabled = false;
 
@@ -142,8 +165,8 @@ namespace World
         {
             if (_isNetworkManaged)
             {
-                // 네트워크 젬은 서버 판정 기반으로만 수집 처리한다.
-                // 클라이언트는 위치를 변경하지 않고 발광만 표시한다.
+                // ?�트?�크 ?��? ?�버 ?�정 기반?�로�??�집 처리?�다.
+                // ?�라?�언?�는 ?�치�?변경하지 ?�고 발광�??�시?�다.
                 UpdateGlow();
                 return;
             }
@@ -158,10 +181,10 @@ namespace World
                 CheckMagnetRange();
             }
 
-            // 발광 펄싱 (Slither.io 스타일 반짝임)
+            // 발광 ?�싱 (Slither.io ?��???반짝??
             UpdateGlow();
 
-            // 스폰 시 스케일 복귀 (팝 애니메이션)
+            // ?�폰 ???��???복�? (???�니메이??
             if (transform.localScale.x < _targetScale - 0.01f)
             {
                 float s = Mathf.MoveTowards(transform.localScale.x, _targetScale, Time.deltaTime * _targetScale * 4f);
@@ -170,8 +193,8 @@ namespace World
         }
 
         /// <summary>
-        /// MaterialPropertyBlock으로 HDR 색상을 적용하여 Bloom이 반응하게 한다.
-        /// SpriteRenderer.color는 0~1 클램핑이라 HDR 불가.
+        /// MaterialPropertyBlock?�로 HDR ?�상???�용?�여 Bloom??반응?�게 ?�다.
+        /// SpriteRenderer.color??0~1 ?�램?�이??HDR 불�?.
         /// </summary>
         private void UpdateGlow()
         {
@@ -179,14 +202,14 @@ namespace World
 
             float pulse = Mathf.Sin((Time.time + _glowOffset) * GLOW_SPEED);
             float t = (pulse + 1f) * 0.5f;
-            // HDR 색상: 기본 색상 × 발광 강도 (1.0 초과 → Bloom 반응)
+            // HDR ?�상: 기본 ?�상 × 발광 강도 (1.0 초과 ??Bloom 반응)
             Color hdrColor = _baseColor * Mathf.Lerp(1f, GLOW_INTENSITY, t);
             hdrColor.a = 1f;
             ApplyHDRColor(hdrColor);
         }
 
         /// <summary>
-        /// MaterialPropertyBlock을 통해 HDR 색상을 SpriteRenderer에 적용.
+        /// MaterialPropertyBlock???�해 HDR ?�상??SpriteRenderer???�용.
         /// </summary>
         private void ApplyHDRColor(Color hdrColor)
         {
@@ -197,8 +220,8 @@ namespace World
         }
 
         /// <summary>
-        /// 타원 궤도를 그리며 부유한다.
-        /// 보석마다 _wobbleOffset이 달라 동시에 움직이지 않는다.
+        /// ?�??궤도�?그리�?부?�한??
+        /// 보석마다 _wobbleOffset???�라 ?�시???�직이지 ?�는??
         /// </summary>
         private void UpdateWobble()
         {
@@ -209,8 +232,8 @@ namespace World
         }
 
         /// <summary>
-        /// 플레이어가 자석 반경 안에 들어왔는지 확인한다.
-        /// FindObjectOfType 대신 캐싱하여 매 프레임 호출을 방지한다.
+        /// ?�레?�어가 ?�석 반경 ?�에 ?�어?�는지 ?�인?�다.
+        /// FindObjectOfType ?�??캐싱?�여 �??�레???�출??방�??�다.
         /// </summary>
         private void CheckMagnetRange()
         {
@@ -245,17 +268,93 @@ namespace World
         }
 
         /// <summary>
-        /// 플레이어를 향해 가속하며 빨려들어간다.
+        /// ?�레?�어�??�해 가?�하�?빨려?�어간다.
         /// </summary>
         private void UpdateMagnet()
         {
             if (_playerTransform == null) return;
 
-            _magnetSpeed += Time.deltaTime * 20f; // 점점 빨라짐
+            _magnetSpeed += Time.deltaTime * 20f; // ?�점 빨라�?
             Vector3 dir = (_playerTransform.position - transform.position).normalized;
             transform.position += dir * (_magnetSpeed * Time.deltaTime);
         }
 
+        private void TryApplyClientPredictedCollect()
+        {
+            if (_predictedCollectVisualApplied) return;
+            if (!TryResolveLocalCollector(out Network.NetworkPlayer localNetPlayer)) return;
+            if (localNetPlayer == null || localNetPlayer.IsDead) return;
+
+            float score = GameManager.Instance != null
+                ? GameManager.Instance.Settings.GemScore
+                : 10f;
+            if (score <= 0f) return;
+
+            float collectDistance = ResolvePredictedCollectDistance();
+            float sqrDist = (localNetPlayer.transform.position - transform.position).sqrMagnitude;
+            if (sqrDist > collectDistance * collectDistance)
+                return;
+
+            ApplyPredictedCollectVisual();
+            localNetPlayer.ClientPredictGemCollect(score);
+            if (Systems.SoundManager.Instance != null)
+                Systems.SoundManager.Instance.PlayGemCollect(isPredicted: true);
+        }
+
+        private bool TryResolveLocalCollector(out Network.NetworkPlayer localNetPlayer)
+        {
+            localNetPlayer = _localCollector;
+            if (localNetPlayer != null && localNetPlayer.isLocalPlayer)
+            {
+                if (_localCollectorCollider == null)
+                    _localCollectorCollider = localNetPlayer.GetComponent<Collider2D>();
+                return true;
+            }
+
+            if (Time.unscaledTime < _nextLocalCollectorLookupAt)
+                return false;
+
+            _nextLocalCollectorLookupAt = Time.unscaledTime + LOCAL_COLLECTOR_LOOKUP_INTERVAL;
+
+            localNetPlayer = Network.NetworkPlayer.LocalPlayer;
+            if (localNetPlayer == null)
+                localNetPlayer = FindObjectOfType<Network.NetworkPlayer>();
+
+            if (localNetPlayer == null || !localNetPlayer.isLocalPlayer)
+            {
+                _localCollector = null;
+                _localCollectorCollider = null;
+                return false;
+            }
+
+            _localCollector = localNetPlayer;
+            _localCollectorCollider = localNetPlayer.GetComponent<Collider2D>();
+            return true;
+        }
+
+        private float ResolvePredictedCollectDistance()
+        {
+            float gemRadius = ResolveColliderRadius(_collider);
+            float collectorRadius = ResolveColliderRadius(_localCollectorCollider);
+            return gemRadius + collectorRadius + PREDICTED_COLLECT_MARGIN;
+        }
+
+        private static float ResolveColliderRadius(Collider2D collider)
+        {
+            if (collider == null) return FALLBACK_COLLIDER_RADIUS;
+
+            if (collider is CircleCollider2D circleCollider)
+            {
+                float scaleX = Mathf.Abs(circleCollider.transform.lossyScale.x);
+                float scaleY = Mathf.Abs(circleCollider.transform.lossyScale.y);
+                float scale = Mathf.Max(scaleX, scaleY);
+                return circleCollider.radius * Mathf.Max(scale, 0.0001f);
+            }
+
+            Vector3 extents = collider.bounds.extents;
+            float radius = Mathf.Max(extents.x, extents.y);
+            return Mathf.Max(radius, FALLBACK_COLLIDER_RADIUS);
+        }
         private void OnTriggerEnter2D(Collider2D other)
         {
             float score = GameManager.Instance != null
@@ -264,19 +363,25 @@ namespace World
 
             if (_isNetworkManaged)
             {
-                // 네트워크 모드: 서버에서만 수집 판정 및 점수 확정
-                if (!NetworkServer.active) return;
-
-                var netPlayer = other.GetComponent<Network.NetworkPlayer>();
-                if (netPlayer != null)
+                // ?�트?�크 모드: ?�버?�서�??�집 ?�정 �??�수 ?�정
+                if (!NetworkServer.active)
                 {
-                    netPlayer.ServerAddScore(score);
-                    Collect(isPlayer: true);
+                    var localNetPlayer = ResolveCollectorNetworkPlayer(other);
+                    if (localNetPlayer != null && localNetPlayer.isLocalPlayer && !localNetPlayer.IsDead)
+                    {
+                        TryRequestPredictedCollect(localNetPlayer, score);
+                    }
+                    return;
+                }
+
+                var netPlayer = ResolveCollectorNetworkPlayer(other);
+                if (netPlayer != null && TryServerCollectFromPlayer(netPlayer, score))
+                {
                     return;
                 }
             }
 
-            // 로컬 모드(싱글) 또는 네트워크 서버의 AI 수집 처리
+            // 로컬 모드(?��?) ?�는 ?�트?�크 ?�버??AI ?�집 처리
             var digger = other.GetComponent<Player.IDigger>();
             if (digger == null) return;
 
@@ -288,7 +393,7 @@ namespace World
 
         private void Collect(bool isPlayer = true)
         {
-            // 플레이어일 경우 사운드 재생 (점수는 IDigger.AddScore에서 처리됨)
+            // ?�레?�어??경우 ?�운???�생 (?�수??IDigger.AddScore?�서 처리??
             if (isPlayer && !_isNetworkManaged)
             {
                 if (Systems.SoundManager.Instance != null)
@@ -303,7 +408,10 @@ namespace World
             if (_isNetworkManaged)
             {
                 if (NetworkServer.active)
+                {
+                    _serverCollected = true;
                     NetworkServer.Destroy(gameObject);
+                }
                 return;
             }
 
@@ -311,6 +419,204 @@ namespace World
                 ObjectPoolManager.Instance.Despawn(_originPrefab, gameObject);
             else
                 Destroy(gameObject);
+        }
+
+        private static Network.NetworkPlayer ResolveCollectorNetworkPlayer(Collider2D other)
+        {
+            if (other == null) return null;
+
+            Network.NetworkPlayer netPlayer = other.GetComponent<Network.NetworkPlayer>();
+            if (netPlayer != null) return netPlayer;
+
+            if (other.attachedRigidbody != null)
+            {
+                netPlayer = other.attachedRigidbody.GetComponent<Network.NetworkPlayer>();
+                if (netPlayer != null) return netPlayer;
+            }
+
+            return other.GetComponentInParent<Network.NetworkPlayer>();
+        }
+
+        private void TryRequestPredictedCollect(Network.NetworkPlayer localNetPlayer, float score)
+        {
+            if (_predictedCollectVisualApplied) return;
+            if (localNetPlayer == null || !localNetPlayer.isLocalPlayer || localNetPlayer.IsDead) return;
+            if (score <= 0f) return;
+
+            ApplyPredictedCollectVisual();
+            localNetPlayer.ClientPredictGemCollect(score);
+            if (Systems.SoundManager.Instance != null)
+                Systems.SoundManager.Instance.PlayGemCollect(isPredicted: true);
+
+            RequestServerCollect(localNetPlayer);
+        }
+
+        [Client]
+        private void RequestServerCollect(Network.NetworkPlayer localNetPlayer)
+        {
+            if (!_isNetworkManaged) return;
+            if (localNetPlayer == null || !localNetPlayer.isLocalPlayer) return;
+            if (!Network.NetworkPlayer.CanSendCommands) return;
+
+            if (_networkIdentity == null)
+                _networkIdentity = GetComponent<NetworkIdentity>();
+
+            if (_networkIdentity == null)
+                return;
+
+            if (_networkIdentity.netId == 0u)
+            {
+                if (_pendingCollectRequestRoutine == null)
+                    _pendingCollectRequestRoutine = StartCoroutine(RetryRequestServerCollect());
+                return;
+            }
+
+            localNetPlayer.CmdRequestCollectGem(_networkIdentity, localNetPlayer.transform.position, transform.position);
+        }
+
+        [Client]
+        private System.Collections.IEnumerator RetryRequestServerCollect()
+        {
+            const int maxRetryFrames = 20;
+            for (int i = 0; i < maxRetryFrames; i++)
+            {
+                if (!_predictedCollectVisualApplied)
+                    break;
+
+                if (_networkIdentity == null)
+                    _networkIdentity = GetComponent<NetworkIdentity>();
+
+                if (_networkIdentity != null &&
+                    _networkIdentity.netId != 0u &&
+                    Network.NetworkPlayer.CanSendCommands &&
+                    TryResolveLocalCollector(out Network.NetworkPlayer localNetPlayer) &&
+                    localNetPlayer != null &&
+                    localNetPlayer.isLocalPlayer &&
+                    !localNetPlayer.IsDead)
+                {
+                    localNetPlayer.CmdRequestCollectGem(
+                        _networkIdentity,
+                        localNetPlayer.transform.position,
+                        transform.position);
+                    break;
+                }
+
+                yield return null;
+            }
+
+            _pendingCollectRequestRoutine = null;
+        }
+
+        [Server]
+        public bool ServerTryCollectFromRequest(Network.NetworkPlayer collector, Vector2 collectorReportedPos, Vector2 gemReportedPos)
+        {
+            if (!_isNetworkManaged || !NetworkServer.active) return false;
+            if (_serverCollected) return false;
+            if (collector == null || collector.IsDead) return false;
+
+            float score = GameManager.Instance != null
+                ? GameManager.Instance.Settings.GemScore
+                : 10f;
+
+            // 서버 위치/보고 위치를 모두 허용치 검증해 지연 환경에서도 확정 누락을 줄인다.
+            float strictDistance = Vector2.Distance((Vector2)collector.transform.position, (Vector2)transform.position);
+            float reportedDistance = Vector2.Distance(collectorReportedPos, gemReportedPos);
+            float allowedDistance = ResolveServerCollectRadius() + ResolveCollectorRadius(collector) + PREDICTED_COLLECT_MARGIN;
+            float collectorDrift = Vector2.Distance((Vector2)collector.transform.position, collectorReportedPos);
+            float gemDrift = Vector2.Distance((Vector2)transform.position, gemReportedPos);
+            bool inStrictRange = strictDistance <= allowedDistance;
+            bool inReportedRange = reportedDistance <= (allowedDistance + 0.35f) &&
+                                   collectorDrift <= 2.5f &&
+                                   gemDrift <= 2.5f;
+
+            if (!inStrictRange && !inReportedRange)
+                return false;
+
+            return TryServerCollectFromPlayer(collector, score);
+        }
+
+        [Server]
+        public float ResolveServerCollectRadius()
+        {
+            return ResolveColliderRadius(_collider);
+        }
+
+        [Server]
+        private bool TryServerCollectFromPlayer(Network.NetworkPlayer collector, float score)
+        {
+            if (!_isNetworkManaged || !NetworkServer.active) return false;
+            if (_serverCollected) return false;
+            if (collector == null || collector.IsDead) return false;
+
+            _serverCollected = true;
+            collector.ServerAddScore(score);
+            Collect(isPlayer: true);
+            return true;
+        }
+
+        [Server]
+        private static float ResolveCollectorRadius(Network.NetworkPlayer collector)
+        {
+            if (collector == null) return FALLBACK_COLLIDER_RADIUS;
+            return ResolveColliderRadius(collector.GetComponent<Collider2D>());
+        }
+
+        private void ApplyPredictedCollectVisual()
+        {
+            if (_predictedCollectVisualApplied)
+                return;
+
+            _predictedCollectVisualApplied = true;
+
+            if (_collider != null)
+                _collider.enabled = false;
+            if (_sr != null)
+                _sr.enabled = false;
+
+            if (_predictedCollectRestoreRoutine != null)
+                StopCoroutine(_predictedCollectRestoreRoutine);
+            _predictedCollectRestoreRoutine = StartCoroutine(RestorePredictedCollectVisualRoutine());
+        }
+
+        private System.Collections.IEnumerator RestorePredictedCollectVisualRoutine()
+        {
+            yield return new WaitForSecondsRealtime(PREDICTED_COLLECT_RESTORE_SECONDS);
+
+            if (!_predictedCollectVisualApplied)
+            {
+                _predictedCollectRestoreRoutine = null;
+                yield break;
+            }
+
+            // ?�버 ?�정 Destroy가 지?�된 케?�스?�서�??�복?�다.
+            if (_collider != null)
+                _collider.enabled = true;
+            if (_sr != null)
+                _sr.enabled = true;
+
+            _predictedCollectVisualApplied = false;
+            _predictedCollectRestoreRoutine = null;
+        }
+
+        private void ResetPredictedCollectVisual()
+        {
+            if (_pendingCollectRequestRoutine != null)
+            {
+                StopCoroutine(_pendingCollectRequestRoutine);
+                _pendingCollectRequestRoutine = null;
+            }
+
+            if (_predictedCollectRestoreRoutine != null)
+            {
+                StopCoroutine(_predictedCollectRestoreRoutine);
+                _predictedCollectRestoreRoutine = null;
+            }
+
+            _predictedCollectVisualApplied = false;
+            if (_sr != null)
+                _sr.enabled = true;
+            if (_collider != null)
+                _collider.enabled = true;
         }
     }
 }

@@ -15,8 +15,8 @@ MonoBehaviour:
   BaseSpeed: 5
   BaseTurnSpeed: 180
   BoostMultiplier: 1.5
-  BoostScoreCostPerSecond: 5
-  ScorePerSizeUnit: 100
+  BoostScoreCostPerSecond: 7
+  ScorePerSizeUnit: 130
   MinScale: 0.5
   MaxScale: 3
   BaseCameraZoom: 3
@@ -26,12 +26,17 @@ MonoBehaviour:
   MaxSegmentsPerChunk: 100
   BaseTunnelLength: 10
   TunnelLengthPerScore: 0.5
-  GemScore: 10
-  GemSpawnInterval: 0.5
+  GemScore: 8
+  GemSpawnInterval: 0.35
   GemSpawnRadius: 15
-  MaxGemCount: 100
+  MaxGemCount: 140
   GemMagnetRadius: 1
+  KillRewardScore: 35
   MapRadius: 65
   PlayerSpawnRadiusRatio: 0.6
+  BotSpawnRadiusRatio: 0.7
+  SandwormSpawnRadiusRatio: 0.8
+  AutoPatrolRadiusRatio: 0.75
+  RespawnRadiusRatio: 0.5
   MapWarningZone: 5
   BoundarySegments: 64

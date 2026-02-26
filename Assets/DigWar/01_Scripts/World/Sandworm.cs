@@ -75,7 +75,8 @@ namespace World
         private const float WALL_AVOID_DISTANCE = 8f;
         private const float HISTORY_STEP = 0.15f; // 히스토리 기록 최소 거리
         private const int SORTING_ORDER_HEAD = 20;
-        private const float HAZARD_KILL_RADIUS_SCALE = 0.45f;
+        // 서버 근접 즉사 반경을 완화해 보이는 충돌과 판정 괴리를 줄인다.
+        private const float HAZARD_KILL_RADIUS_SCALE = 0.33f;
         private const float HAZARD_CHECK_INTERVAL = 0.05f;
         private const float CLIENT_HISTORY_RESYNC_DELTA_SECONDS = 0.2f;
         private const float CLIENT_HISTORY_RESYNC_COOLDOWN_SECONDS = 0.6f;
@@ -469,14 +470,19 @@ namespace World
 
             spawnPos += (Vector3)(Random.insideUnitCircle * 0.5f);
 
+            // 젬 배출 좌표는 GemSpawner 단일 경로로 통일해 경계 클램프를 보장한다.
+            if (World.GemSpawner.Instance != null)
+            {
+                if (!IsNetworkMode || NetworkServer.active)
+                    World.GemSpawner.Instance.DropGemAt(spawnPos);
+                return;
+            }
+
             if (IsNetworkMode)
             {
                 if (!NetworkServer.active) return;
 
-                if (World.GemSpawner.Instance != null)
-                    World.GemSpawner.Instance.DropGemAt(spawnPos);
-                else
-                    Debug.LogWarning("[Sandworm] GemSpawner missing in network mode. Gem drop skipped.");
+                Debug.LogWarning("[Sandworm] GemSpawner missing in network mode. Gem drop skipped.");
                 return;
             }
 

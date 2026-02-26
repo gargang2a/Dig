@@ -35,9 +35,7 @@ namespace Player
         private float _nextAutoRetargetAt;
         private float _autoRespawnAt = -1f;
 
-        private const float NETWORK_KILL_REQUEST_INTERVAL = 0.1f;
-        private const float CLIENT_MAX_BOT_KILL_REQUEST_DISTANCE = 6.8f;
-        private const float CLIENT_MAX_PLAYER_KILL_REQUEST_DISTANCE = 8.4f;
+        private const float NETWORK_KILL_REQUEST_INTERVAL = 0.02f;
         private const float AUTO_MOVE_RETARGET_INTERVAL = 1.2f;
         private const float AUTO_MOVE_REACH_DISTANCE = 1.0f;
         private const float AUTO_RESPAWN_DELAY_SECONDS = 1.0f;
@@ -197,7 +195,9 @@ namespace Player
             if (Time.time >= _nextAutoRetargetAt ||
                 (transform.position - _autoMoveTarget).sqrMagnitude <= reachedSqrDistance)
             {
-                float patrolRadius = _settings != null ? _settings.MapRadius * 0.75f : 20f;
+                float mapRadius = _settings != null ? _settings.MapRadius : 65f;
+                float patrolRadiusRatio = _settings != null ? _settings.AutoPatrolRadiusRatio : 0.75f;
+                float patrolRadius = Mathf.Max(1f, mapRadius * patrolRadiusRatio);
                 Vector2 patrolPoint = Random.insideUnitCircle * patrolRadius;
                 _autoMoveTarget = new Vector3(patrolPoint.x, patrolPoint.y, 0f);
                 _nextAutoRetargetAt = Time.time + AUTO_MOVE_RETARGET_INTERVAL;
@@ -386,8 +386,13 @@ namespace Player
                 NetworkIdentity targetIdentity = ResolveNetworkKillTarget(myNetPlayer, other);
                 if (targetIdentity == null) return;
 
-                Vector2 attackerReportedPos = transform.position;
-                Vector2 targetReportedPos = targetIdentity.transform.position;
+                Vector2 attackerReportedPos = _rb != null
+                    ? _rb.position
+                    : (Vector2)transform.position;
+                Rigidbody2D targetRb = targetIdentity.GetComponent<Rigidbody2D>();
+                Vector2 targetReportedPos = targetRb != null
+                    ? targetRb.position
+                    : (Vector2)targetIdentity.transform.position;
                 _nextNetworkKillRequestAt = Time.time + NETWORK_KILL_REQUEST_INTERVAL;
                 myNetPlayer.CmdRequestKillWithReported(targetIdentity, attackerReportedPos, targetReportedPos);
                 return;
@@ -432,14 +437,6 @@ namespace Player
                 var botController = targetBot.GetComponent<AIController>();
                 if (botController != null && botController.IsDead) return null;
             }
-
-            // 클라이언트에서 비정상적으로 먼 타깃 요청을 미리 걸러
-            // 서버 distance reject 스팸을 줄인다.
-            float maxRequestDistance = targetPlayer != null
-                ? CLIENT_MAX_PLAYER_KILL_REQUEST_DISTANCE
-                : CLIENT_MAX_BOT_KILL_REQUEST_DISTANCE;
-            float sqrDistance = (candidate.transform.position - transform.position).sqrMagnitude;
-            if (sqrDistance > maxRequestDistance * maxRequestDistance) return null;
 
             return candidate;
         }
@@ -558,8 +555,11 @@ namespace Player
             _isAttacking = false;
 
             // 랜덤 위치로 리스폰
-            float mapRadius = GameManager.Instance != null
-                ? GameManager.Instance.Settings.MapRadius * 0.5f : 15f;
+            var settings = GameManager.Instance != null ? GameManager.Instance.Settings : _settings;
+            float mapRadius = settings != null
+                ? settings.MapRadius * settings.RespawnRadiusRatio
+                : 32.5f;
+            mapRadius = Mathf.Max(1f, mapRadius);
             Vector2 randomPos = Random.insideUnitCircle * mapRadius;
             transform.position = new Vector3(randomPos.x, randomPos.y, 0f);
             transform.rotation = Quaternion.Euler(0f, 0f, Random.Range(0f, 360f));

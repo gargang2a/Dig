@@ -24,7 +24,7 @@ namespace Player
 
         [Header("봇 설정")]
         [Tooltip("Number of bots to spawn")]
-        [SerializeField] private int _botCount = 3;
+        [SerializeField] private int _botCount = 12;
 
         [Tooltip("서버에서 죽은 봇을 자동으로 보충한다.")]
         [SerializeField] private bool _autoRespawnBots = true;
@@ -239,7 +239,9 @@ namespace Player
         /// <summary>봇 GameObject를 조립한다.</summary>
         private GameObject AssembleBot(int index, bool enableAI)
         {
-            float radius = _settings != null ? _settings.MapRadius * 0.7f : 20f;
+            float mapRadius = _settings != null ? _settings.MapRadius : 65f;
+            float spawnRadiusRatio = _settings != null ? _settings.BotSpawnRadiusRatio : 0.7f;
+            float radius = Mathf.Max(1f, mapRadius * spawnRadiusRatio);
             Vector2 randomPos = Random.insideUnitCircle * radius;
 
             var botObj = new GameObject($"Bot_{index}");

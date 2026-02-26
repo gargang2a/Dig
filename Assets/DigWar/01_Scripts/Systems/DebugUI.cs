@@ -29,12 +29,16 @@ namespace Systems
         private const KeyCode ALT_AUTO_MODE_KEY = KeyCode.Equals;
         private const KeyCode AUTO_MODE_OFF_KEY = KeyCode.LeftBracket;
         private const KeyCode AUTO_MODE_ON_KEY = KeyCode.RightBracket;
-        private const KeyCode MUTE_TOGGLE_KEY = KeyCode.M;
+        private const string WEB_QUERY_DEBUG_KEY = "debug";
+        private const string WEB_QUERY_DEBUG_UI_KEY = "debugui";
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void EnsureDebugUiExists()
         {
+            if (!ShouldEnableDebugUiAtRuntime())
+                return;
+
             if (FindObjectOfType<DebugUI>() != null)
                 return;
 
@@ -66,7 +70,6 @@ namespace Systems
         private bool _autoModeToggleRequested;
         private bool _autoModeEnableRequested;
         private bool _autoModeDisableRequested;
-        private bool _muteToggleRequested;
         private bool _slowMotionEnabled;
 
         [Header("Auto Test")]
@@ -80,6 +83,12 @@ namespace Systems
 
         private void Start()
         {
+            if (!ShouldEnableDebugUiAtRuntime())
+            {
+                gameObject.SetActive(false);
+                return;
+            }
+
             _player = ResolveLocalPlayer();
             ResetKpiSession();
             Player.PlayerController.SetGlobalAutoModeEnabled(_enableAutoModeOnStart);
@@ -432,13 +441,6 @@ namespace Systems
             if (autoModeOffRequested)
                 SetAutoMode(false);
 
-            bool muteRequested =
-                ConsumeRequested(ref _muteToggleRequested) ||
-                IsLegacyHotkeyPressed(MUTE_TOGGLE_KEY) ||
-                IsInputSystemHotkeyPressed(MUTE_TOGGLE_KEY);
-            if (muteRequested)
-                ToggleMute();
-
             bool isClientConnected = NetworkClient.isConnected;
             if (isClientConnected && !_wasClientConnected)
             {
@@ -541,11 +543,6 @@ namespace Systems
                 return;
             }
 
-            if (currentEvent.keyCode == MUTE_TOGGLE_KEY)
-            {
-                _muteToggleRequested = true;
-                currentEvent.Use();
-            }
         }
 
         private static bool IsInputSystemHotkeyPressed(KeyCode keyCode)
@@ -577,8 +574,6 @@ namespace Systems
                     return keyboard.leftBracketKey.wasPressedThisFrame;
                 case KeyCode.RightBracket:
                     return keyboard.rightBracketKey.wasPressedThisFrame;
-                case KeyCode.M:
-                    return keyboard.mKey.wasPressedThisFrame;
             }
 #endif
             return false;
@@ -678,6 +673,68 @@ namespace Systems
             bool requested = requestedByOnGui;
             requestedByOnGui = false;
             return requested;
+        }
+
+        private static bool ShouldEnableDebugUiAtRuntime()
+        {
+#if UNITY_EDITOR
+            return true;
+#elif UNITY_WEBGL
+            return HasEnabledWebDebugFlag();
+#else
+            return Debug.isDebugBuild;
+#endif
+        }
+
+        private static bool HasEnabledWebDebugFlag()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            string absoluteUrl = Application.absoluteURL ?? string.Empty;
+            return TryGetEnabledQueryFlag(absoluteUrl, WEB_QUERY_DEBUG_KEY) ||
+                   TryGetEnabledQueryFlag(absoluteUrl, WEB_QUERY_DEBUG_UI_KEY);
+#else
+            return false;
+#endif
+        }
+
+        private static bool TryGetEnabledQueryFlag(string absoluteUrl, string key)
+        {
+            if (string.IsNullOrWhiteSpace(absoluteUrl) || string.IsNullOrWhiteSpace(key))
+                return false;
+
+            int queryStart = absoluteUrl.IndexOf('?');
+            if (queryStart < 0 || queryStart >= absoluteUrl.Length - 1)
+                return false;
+
+            string query = absoluteUrl.Substring(queryStart + 1);
+            int fragmentStart = query.IndexOf('#');
+            if (fragmentStart >= 0)
+                query = query.Substring(0, fragmentStart);
+
+            if (string.IsNullOrWhiteSpace(query))
+                return false;
+
+            string[] pairs = query.Split('&', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < pairs.Length; i++)
+            {
+                string pair = pairs[i];
+                int equalsIndex = pair.IndexOf('=');
+                string rawName = equalsIndex >= 0 ? pair.Substring(0, equalsIndex) : pair;
+                string rawValue = equalsIndex >= 0 ? pair.Substring(equalsIndex + 1) : "1";
+
+                string decodedName = Uri.UnescapeDataString(rawName.Replace('+', ' '));
+                if (!decodedName.Equals(key, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string decodedValue = Uri.UnescapeDataString(rawValue.Replace('+', ' ')).Trim().ToLowerInvariant();
+                return decodedValue == "1" ||
+                       decodedValue == "true" ||
+                       decodedValue == "yes" ||
+                       decodedValue == "y" ||
+                       decodedValue == "on";
+            }
+
+            return false;
         }
 
         private void ResetKpiSession()

@@ -17,14 +17,14 @@ namespace Core
         [SerializeField] private GameObject _sandwormPrefab;
 
         [Tooltip("Active sandworm count")]
-        [SerializeField] private int _sandwormCount = 1;
+        [SerializeField] private int _sandwormCount = 9;
 
         [Tooltip("스폰 후 활동까지 대기 시간 (초)")]
         [SerializeField] private float _spawnDelay = 5f;
 
         // 샌드웜 전용 assetId
         private const uint SANDWORM_ASSET_ID = 10002;
-        private const int FREE_MVP_SANDWORM_HARD_CAP = 3;
+        private const int FREE_MVP_SANDWORM_HARD_CAP = 9;
         private bool _spawnScheduled;
 
         private void Awake()
@@ -98,16 +98,20 @@ namespace Core
             }
 
             float mapRadius = 65f;
+            float spawnRadiusRatio = 0.8f;
             if (GameManager.Instance != null && GameManager.Instance.Settings != null)
+            {
                 mapRadius = GameManager.Instance.Settings.MapRadius;
+                spawnRadiusRatio = GameManager.Instance.Settings.SandwormSpawnRadiusRatio;
+            }
 
             int spawnCount = ResolveSpawnCount();
             for (int i = 0; i < spawnCount; i++)
             {
                 float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
                 Vector2 spawnPos = new Vector2(
-                    Mathf.Cos(angle) * (mapRadius * 0.8f),
-                    Mathf.Sin(angle) * (mapRadius * 0.8f)
+                    Mathf.Cos(angle) * (mapRadius * spawnRadiusRatio),
+                    Mathf.Sin(angle) * (mapRadius * spawnRadiusRatio)
                 );
 
                 var worm = Instantiate(_sandwormPrefab, spawnPos, Quaternion.identity);

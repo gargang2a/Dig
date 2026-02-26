@@ -6,7 +6,7 @@ param(
     [int]$DurationMinutes = 10,
     [int]$PollSeconds = 30,
     [int]$BotIndexSpikeMultiplier = 4,
-    [int]$MaxAllowedSandworms = 3
+    [int]$MaxAllowedSandworms = 9
 )
 
 $ErrorActionPreference = "Stop"

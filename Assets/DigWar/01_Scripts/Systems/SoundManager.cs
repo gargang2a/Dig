@@ -1,19 +1,25 @@
+﻿using System;
 using UnityEngine;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
 namespace Systems
 {
     /// <summary>
-    /// 게임 내 모든 사운드(BGM, SFX)를 관리하는 중앙 오디오 매니저.
-    /// 싱글톤으로 어디서든 접근 가능하며, 오디오 클립과 소스를 관리한다.
+    /// 寃뚯엫 ??紐⑤뱺 ?ъ슫??BGM, SFX)瑜?愿由ы븯??以묒븰 ?ㅻ뵒??留ㅻ땲?.
+    /// ?깃??ㅼ쑝濡??대뵒?쒕뱺 ?묎렐 媛?ν븯硫? ?ㅻ뵒???대┰怨??뚯뒪瑜?愿由ы븳??
     /// </summary>
     public class SoundManager : MonoBehaviour
     {
+        private const KeyCode MUTE_HOTKEY = KeyCode.M;
+
         public static SoundManager Instance { get; private set; }
 
         [Header("Audio Sources")]
         [SerializeField] private AudioSource _bgmSource;
         [SerializeField] private AudioSource _sfxSource;
-        [SerializeField] private AudioSource _engineSource; // 플레이어 이동/부스트용 (Loop)
+        [SerializeField] private AudioSource _engineSource; // ?뚮젅?댁뼱 ?대룞/遺?ㅽ듃??(Loop)
 
         [Header("BGM Clips")]
         [SerializeField] private AudioClip _mainBgm;
@@ -21,13 +27,15 @@ namespace Systems
         [Header("SFX Clips")]
         [SerializeField] private AudioClip _gemCollectClip;
         [SerializeField] private AudioClip _playerDieClip;
+        [SerializeField] private AudioClip _killConfirmClip;
         [SerializeField] private AudioClip _gameStartClip;
-        [SerializeField] private AudioClip _boostLoopClip; // Engine Source용
+        [SerializeField] private AudioClip _boostLoopClip; // Engine Source??
 
         [Header("Settings")]
         [SerializeField, Range(0f, 1f)] private float _masterVolume = 1f;
-        [SerializeField] private float _gemSoundCooldown = 0.05f; // 너무 잦은 재생 방지
+        [SerializeField] private float _gemSoundCooldown = 0.05f; // ?덈Т ??? ?ъ깮 諛⑹?
         [SerializeField] private bool _startMuted = false;
+        [SerializeField] private bool _enableGlobalMuteHotkey = true;
 
         [Header("Engine Sound Settings")]
         [SerializeField, Range(1f, 2f)] private float _boostPitchBase = 1.4f;
@@ -35,7 +43,10 @@ namespace Systems
         [SerializeField, Range(0.1f, 10f)] private float _jitterFrequency = 2.0f;
 
         private float _lastGemSoundTime;
+        private float _predictedGemSoundSuppressUntil;
         private bool _isMuted;
+        private int _lastMuteToggleFrame = -1;
+        private const float GEM_CONFIRM_SUPPRESS_WINDOW = 0.2f;
 
         private void Awake()
         {
@@ -47,18 +58,47 @@ namespace Systems
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
-            // AudioSource 자동 생성 (Inspector 연결 안 됐을 경우)
+            // AudioSource ?먮룞 ?앹꽦 (Inspector ?곌껐 ???먯쓣 寃쎌슦)
             if (_bgmSource == null) _bgmSource = CreateAudioSource("BGMSource", true);
             if (_sfxSource == null) _sfxSource = CreateAudioSource("SFXSource", false);
             if (_engineSource == null) _engineSource = CreateAudioSource("EngineSource", true);
 
             _isMuted = _startMuted;
             ApplyMuteState();
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            _enableGlobalMuteHotkey = true;
+#endif
         }
 
         private void Start()
         {
             PlayBGM(_mainBgm);
+        }
+
+        private void Update()
+        {
+            if (!_enableGlobalMuteHotkey)
+                return;
+
+            if (WasMuteHotkeyPressedThisFrame())
+                TryToggleMuteFromHotkey();
+        }
+
+        private void OnGUI()
+        {
+            if (!_enableGlobalMuteHotkey)
+                return;
+
+            Event currentEvent = Event.current;
+            if (currentEvent == null || currentEvent.type != EventType.KeyDown)
+                return;
+
+            if (!IsMuteHotkeyEvent(currentEvent))
+                return;
+
+            TryToggleMuteFromHotkey();
+            currentEvent.Use();
         }
 
         private AudioSource CreateAudioSource(string name, bool loop)
@@ -103,13 +143,18 @@ namespace Systems
         }
 
         /// <summary>
-        /// 젬 획득 사운드 (쿨타임 적용)
+        /// ???띾뱷 ?ъ슫??(荑⑦????곸슜)
         /// </summary>
-        public void PlayGemCollect()
+        public void PlayGemCollect(bool isPredicted = false)
         {
+            float now = Time.unscaledTime;
+            if (!isPredicted && now <= _predictedGemSoundSuppressUntil) return;
             if (Time.time - _lastGemSoundTime < _gemSoundCooldown) return;
-            
+
             _lastGemSoundTime = Time.time;
+            if (isPredicted)
+                _predictedGemSoundSuppressUntil = now + GEM_CONFIRM_SUPPRESS_WINDOW;
+
             PlaySFX(_gemCollectClip, 0.7f);
         }
 
@@ -124,16 +169,35 @@ namespace Systems
             PlaySFX(_gameStartClip);
         }
 
+        public void PlayKillConfirm()
+        {
+            if (_killConfirmClip != null)
+            {
+                PlaySFX(_killConfirmClip, 0.95f);
+                return;
+            }
+
+            if (_playerDieClip != null)
+            {
+                PlaySFX(_playerDieClip, 0.85f);
+                return;
+            }
+
+            // 전용 클립이 없으면 시작 SFX로 대체 피드백을 제공한다.
+            if (_gameStartClip != null)
+                PlaySFX(_gameStartClip, 0.9f);
+        }
+
         /// <summary>
-        /// 플레이어 이동/부스트 엔진음 제어
+        /// ?뚮젅?댁뼱 ?대룞/遺?ㅽ듃 ?붿쭊???쒖뼱
         /// </summary>
-        /// <param name="isMoving">이동 중인지</param>
-        /// <param name="isBoosting">부스트 중인지 (점수 부족 시 false)</param>
+        /// <param name="isMoving">?대룞 以묒씤吏</param>
+        /// <param name="isBoosting">遺?ㅽ듃 以묒씤吏 (?먯닔 遺議???false)</param>
         public void UpdateEngineSound(bool isMoving, bool isBoosting)
         {
             if (_engineSource == null) return;
 
-            // 엔진 클립 할당 및 재생 확인
+            // ?붿쭊 ?대┰ ?좊떦 諛??ъ깮 ?뺤씤
             if (_boostLoopClip != null)
             {
                 if (_engineSource.clip != _boostLoopClip)
@@ -154,15 +218,15 @@ namespace Systems
                 targetVolume = isBoosting ? 1f : 0.3f;
                 basePitch = isBoosting ? _boostPitchBase : 1.0f;
 
-                // 피로도 감소를 위한 미세한 피치 변동 (Perlin Noise)
-                // 시간 흐름에 따라 -0.5*Intensity ~ +0.5*Intensity 범위에서 흔들림
+                // ?쇰줈??媛먯냼瑜??꾪븳 誘몄꽭???쇱튂 蹂??(Perlin Noise)
+                // ?쒓컙 ?먮쫫???곕씪 -0.5*Intensity ~ +0.5*Intensity 踰붿쐞?먯꽌 ?붾뱾由?
                 jitter = (Mathf.PerlinNoise(Time.time * _jitterFrequency, 0f) - 0.5f) * _jitterIntensity;
             }
 
-            // 부드러운 전환
+            // 遺?쒕윭???꾪솚
             _engineSource.volume = Mathf.Lerp(_engineSource.volume, targetVolume * _masterVolume, Time.deltaTime * 5f);
             
-            // 피치 = 기본 피치 + 지터
+            // ?쇱튂 = 湲곕낯 ?쇱튂 + 吏??
             float finalPitch = basePitch + jitter;
             _engineSource.pitch = Mathf.Lerp(_engineSource.pitch, finalPitch, Time.deltaTime * 5f);
         }
@@ -180,6 +244,79 @@ namespace Systems
             if (_bgmSource != null) _bgmSource.mute = _isMuted;
             if (_sfxSource != null) _sfxSource.mute = _isMuted;
             if (_engineSource != null) _engineSource.mute = _isMuted;
+            AudioListener.pause = _isMuted;
+        }
+
+        private void TryToggleMuteFromHotkey()
+        {
+            if (_lastMuteToggleFrame == Time.frameCount)
+                return;
+
+            _lastMuteToggleFrame = Time.frameCount;
+            ToggleMute();
+        }
+
+        private static bool WasMuteHotkeyPressedThisFrame()
+        {
+            if (WasLegacyMuteHotkeyPressedThisFrame())
+                return true;
+
+#if ENABLE_INPUT_SYSTEM
+            Keyboard keyboard = Keyboard.current;
+            if (keyboard != null && keyboard.mKey.wasPressedThisFrame)
+                return true;
+#endif
+
+            if (WasMuteCharacterTypedThisFrame())
+                return true;
+
+            return false;
+        }
+
+        private static bool WasMuteCharacterTypedThisFrame()
+        {
+            try
+            {
+                string input = Input.inputString;
+                if (string.IsNullOrEmpty(input))
+                    return false;
+
+                foreach (char c in input)
+                {
+                    if (c == 'm' || c == 'M' || c == 'ㅡ')
+                        return true;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool WasLegacyMuteHotkeyPressedThisFrame()
+        {
+            try
+            {
+                return Input.GetKeyDown(MUTE_HOTKEY);
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private static bool IsMuteHotkeyEvent(Event currentEvent)
+        {
+            if (currentEvent.keyCode == MUTE_HOTKEY)
+                return true;
+
+            if (currentEvent.character == 'm' || currentEvent.character == 'M' || currentEvent.character == 'ㅡ')
+                return true;
+
+            return false;
         }
     }
 }
+

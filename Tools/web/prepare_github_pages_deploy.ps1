@@ -116,6 +116,254 @@ function Normalize-CustomDomain {
     return $Domain.Trim().Trim('/').ToLowerInvariant()
 }
 
+function Enable-ImmersiveWebGlIndex {
+    param([Parameter(Mandatory = $true)][string]$IndexPath)
+
+    if (-not (Test-Path -LiteralPath $IndexPath)) {
+        return $false
+    }
+
+    $content = Get-Content -LiteralPath $IndexPath -Raw
+    $updated = $content
+
+    if ($updated -notmatch "digwar-inline-hide-loading") {
+        $inlineHideBlock = @"
+    <style id="digwar-inline-hide-loading">
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+        background: #111;
+      }
+      #unity-container.unity-desktop {
+        position: fixed !important;
+        left: 0 !important;
+        top: 0 !important;
+        transform: none !important;
+        width: 100vw !important;
+        height: 100vh !important;
+      }
+      #unity-canvas {
+        display: block !important;
+        width: 100vw !important;
+        height: 100vh !important;
+      }
+      #unity-loading-bar,
+      #unity-logo,
+      #unity-progress-bar-empty,
+      #unity-progress-bar-full,
+      #unity-footer,
+      #unity-webgl-logo,
+      #unity-build-title,
+      #unity-fullscreen-button {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+      }
+    </style>
+"@
+        $updated = $updated -replace '</head>', ($inlineHideBlock + "`r`n  </head>")
+    }
+
+    if ($updated -notmatch 'var footer = document.querySelector\("#unity-footer"\);') {
+        $updated = $updated -replace 'var warningBanner = document\.querySelector\("#unity-warning"\);',
+            "var warningBanner = document.querySelector(""#unity-warning"");`r`n      var footer = document.querySelector(""#unity-footer"");"
+    }
+
+    $immersiveDesktopBlock = @"
+      } else {
+        // Desktop style: fill the browser viewport for immersive play.
+        container.className = "unity-desktop";
+      }
+
+      // digwar-immersive-mode
+      function applyImmersiveCanvasSize() {
+        container.style.position = "fixed";
+        container.style.left = "0";
+        container.style.top = "0";
+        container.style.transform = "none";
+        container.style.width = "100vw";
+        container.style.height = "100vh";
+        canvas.style.display = "block";
+        canvas.style.width = "100vw";
+        canvas.style.height = "100vh";
+      }
+
+      window.addEventListener("resize", applyImmersiveCanvasSize);
+      applyImmersiveCanvasSize();
+"@
+
+    $desktopWindowedBlock = @"
+      } else {
+        // Desktop style: Render the game canvas in a window that can be maximized to fullscreen:
+
+        canvas.style.width = "960px";
+        canvas.style.height = "600px";
+      }
+"@
+
+    if ($updated.Contains($desktopWindowedBlock)) {
+        $updated = $updated.Replace($desktopWindowedBlock, $immersiveDesktopBlock)
+    }
+
+    $setFullscreenRegex = 'fullscreenButton\.onclick\s*=\s*\(\)\s*=>\s*\{\s*unityInstance\.SetFullscreen\(1\);\s*\};'
+    $hideFullscreenButton = @"
+                // digwar-no-browser-fullscreen
+                if (fullscreenButton) {
+                  fullscreenButton.style.display = "none";
+                }
+"@
+    $updated = [regex]::Replace($updated, $setFullscreenRegex, $hideFullscreenButton, 1)
+    $updated = $updated.Replace("unityInstance.SetFullscreen(1);", "// digwar-no-browser-fullscreen")
+
+    if ($updated -notmatch "digwar-no-browser-fullscreen") {
+        $loadingHideRegex = 'loadingBar\.style\.display\s*=\s*"none";'
+        $loadingHideReplacement = @"
+                loadingBar.style.display = "none";
+                // digwar-no-browser-fullscreen
+                if (fullscreenButton) {
+                  fullscreenButton.style.display = "none";
+                }
+"@
+        $updated = [regex]::Replace($updated, $loadingHideRegex, $loadingHideReplacement, 1)
+    }
+
+    if ($updated -notmatch "digwar-low-spec-mode") {
+        $configAnchor = '      // By default, Unity keeps WebGL canvas render target size matched with'
+        if ($updated.Contains($configAnchor)) {
+            $lowSpecBlock = @"
+      // digwar-low-spec-mode
+      var queryParams = new URLSearchParams(window.location.search);
+      var lowSpecMode = queryParams.get("low") === "1";
+      if (lowSpecMode) {
+        config.devicePixelRatio = 1;
+        config.webglContextAttributes = Object.assign({}, config.webglContextAttributes || {}, {
+          antialias: false,
+          alpha: false,
+          depth: true,
+          stencil: false,
+          preserveDrawingBuffer: false,
+          powerPreference: "low-power"
+        });
+      }
+
+"@
+            $updated = $updated.Replace($configAnchor, $lowSpecBlock + $configAnchor)
+        }
+    }
+
+    if ($updated -notmatch "digwar-load-error-fallback") {
+        $catchPattern = '\}\)\.catch\(\(message\)\s*=>\s*\{\s*alert\(message\);\s*\}\);'
+        $catchReplacement = @"
+              }).catch((message) => {
+                // digwar-load-error-fallback
+                var reason = (typeof message === "string") ? message : JSON.stringify(message);
+                console.error("[DigWar] Unity load failed:", reason);
+                unityShowBanner("WebGL graphics initialization failed. Enable hardware acceleration and retry with ?low=1", "error");
+              });
+"@
+        $updated = [regex]::Replace($updated, $catchPattern, $catchReplacement, 1)
+    }
+
+    if ($updated -notmatch "digwar-clean-ui") {
+        $loadingPattern = 'loadingBar\.style\.display\s*=\s*"block";'
+        $loadingReplacement = @"
+      // digwar-clean-ui
+      if (loadingBar) {
+        loadingBar.style.display = "none";
+      }
+"@
+        $updated = [regex]::Replace($updated, $loadingPattern, $loadingReplacement, 1)
+    }
+
+    if ($updated -ne $content) {
+        Set-Content -LiteralPath $IndexPath -Value $updated -Encoding UTF8
+        return $true
+    }
+
+    return $false
+}
+
+function Enable-CleanFullscreenStyle {
+    param([Parameter(Mandatory = $true)][string]$StylePath)
+
+    if (-not (Test-Path -LiteralPath $StylePath)) {
+        return $false
+    }
+
+    $content = Get-Content -LiteralPath $StylePath -Raw
+
+    $legacyMarker = "/* digwar-clean-fullscreen */"
+    $legacyMarkerIndex = $content.IndexOf($legacyMarker)
+    if ($legacyMarkerIndex -ge 0) {
+        $content = $content.Substring(0, $legacyMarkerIndex).TrimEnd()
+        $content += "`r`n"
+    }
+
+    if ($content -match "digwar-clean-ui") {
+        Set-Content -LiteralPath $StylePath -Value $content -Encoding UTF8
+        return $false
+    }
+
+$cleanBlock = @"
+
+/* digwar-clean-ui */
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  background: #111;
+}
+
+#unity-container.unity-desktop,
+#unity-canvas {
+  width: 100vw !important;
+  height: 100vh !important;
+}
+
+#unity-container.unity-desktop {
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  transform: none !important;
+}
+
+#unity-canvas {
+  display: block !important;
+}
+
+#unity-loading-bar,
+#unity-logo,
+#unity-progress-bar-empty,
+#unity-progress-bar-full,
+#unity-footer,
+#unity-webgl-logo,
+#unity-build-title,
+#unity-fullscreen-button {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+#unity-warning {
+  position: fixed !important;
+  left: 50% !important;
+  top: 20px !important;
+  transform: translateX(-50%) !important;
+  z-index: 9999 !important;
+  max-width: min(92vw, 760px) !important;
+  border-radius: 8px !important;
+}
+"@
+
+    Set-Content -LiteralPath $StylePath -Value ($content + $cleanBlock) -Encoding UTF8
+    return $true
+}
+
 $releasePathAbs = Resolve-AbsolutePath -Path $ReleasePath
 if (-not (Test-Path -LiteralPath $releasePathAbs)) {
     throw "[Prepare] ReleasePath not found: $releasePathAbs"
@@ -186,6 +434,11 @@ Ensure-Directory -Path $stageVersion
 
 Copy-Item -Path (Join-Path $webGlRoot "*") -Destination $stageCurrent -Recurse -Force
 Copy-Item -Path (Join-Path $webGlRoot "*") -Destination $stageVersion -Recurse -Force
+
+$immersivePatchedCurrent = Enable-ImmersiveWebGlIndex -IndexPath (Join-Path $stageCurrent "index.html")
+$immersivePatchedVersion = Enable-ImmersiveWebGlIndex -IndexPath (Join-Path $stageVersion "index.html")
+$cleanCssPatchedCurrent = Enable-CleanFullscreenStyle -StylePath (Join-Path $stageCurrent "TemplateData\style.css")
+$cleanCssPatchedVersion = Enable-CleanFullscreenStyle -StylePath (Join-Path $stageVersion "TemplateData\style.css")
 
 New-Item -Path (Join-Path $stageCurrent ".nojekyll") -ItemType File -Force | Out-Null
 New-Item -Path (Join-Path $stageVersion ".nojekyll") -ItemType File -Force | Out-Null
@@ -261,6 +514,10 @@ $deployMeta = [ordered]@{
     webGlRoot       = $webGlRoot
     stageCurrent    = $stageCurrent
     stageVersion    = $stageVersion
+    immersiveIndexPatchedCurrent = $immersivePatchedCurrent
+    immersiveIndexPatchedVersion = $immersivePatchedVersion
+    cleanCssPatchedCurrent = $cleanCssPatchedCurrent
+    cleanCssPatchedVersion = $cleanCssPatchedVersion
     pagesTargetPath = $pagesTargetPath
     customDomain    = $normalizedCustomDomain
     expectedPagesUrl = $expectedUrl

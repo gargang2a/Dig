@@ -28,6 +28,9 @@ namespace World
         private int _activeGemCount;
         private float _nextSinglePlayerLookupAt;
         private float _nextSpawnCenterWarningAt;
+        private const float MIN_SPAWN_DISTANCE = 2f;
+        private const float MAP_EDGE_MARGIN = 1.5f;
+        private const int SPAWN_POSITION_MAX_ATTEMPTS = 10;
 
         private const uint GEM_ASSET_ID = 10003;
         private static bool IsNetworkMode => NetworkClient.active || NetworkServer.active;
@@ -93,7 +96,8 @@ namespace World
                     yield return wait;
                     continue;
                 }
-                if (_playerTransform == null)
+
+                if (!IsSpawnCenterValid(_playerTransform))
                 {
                     _playerTransform = ResolveSpawnCenter();
                 }
@@ -124,7 +128,9 @@ namespace World
                 int liveCount = 0;
                 foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
                 {
-                    if (np != null) liveCount++;
+                    if (np == null) continue;
+                    if (!IsSpawnCenterValid(np.transform)) continue;
+                    liveCount++;
                 }
 
                 if (liveCount == 0)
@@ -137,6 +143,7 @@ namespace World
                 foreach (Network.NetworkPlayer np in Network.NetworkPlayer.ActivePlayers)
                 {
                     if (np == null) continue;
+                    if (!IsSpawnCenterValid(np.transform)) continue;
                     if (target == 0) return np.transform;
                     target--;
                 }
@@ -165,6 +172,7 @@ namespace World
 
                 Network.NetworkPlayer player = identity.GetComponent<Network.NetworkPlayer>();
                 if (player == null || player.IsDead) continue;
+                if (!IsSpawnCenterValid(player.transform)) continue;
                 liveCount++;
             }
 
@@ -182,6 +190,7 @@ namespace World
 
                 Network.NetworkPlayer player = identity.GetComponent<Network.NetworkPlayer>();
                 if (player == null || player.IsDead) continue;
+                if (!IsSpawnCenterValid(player.transform)) continue;
 
                 if (target == 0)
                     return player.transform;
@@ -224,9 +233,7 @@ namespace World
         {
             if (_gemPrefab == null || _playerTransform == null) return;
 
-            Vector2 dir = Random.insideUnitCircle.normalized;
-            float dist = Random.Range(5f, _settings.GemSpawnRadius);
-            Vector3 pos = _playerTransform.position + (Vector3)(dir * dist);
+            Vector3 pos = ResolveSpawnPositionAroundCenter(_playerTransform);
 
             if (IsNetworkMode)
             {
@@ -240,6 +247,7 @@ namespace World
         private void SpawnLocalGem(Vector3 pos)
         {
             if (ObjectPoolManager.Instance == null) return;
+            pos = ClampToMapBounds(pos);
 
             GameObject obj = ObjectPoolManager.Instance.Spawn(_gemPrefab, pos, Quaternion.identity);
 
@@ -253,9 +261,85 @@ namespace World
             _activeGemCount++;
         }
 
+        private bool IsSpawnCenterValid(Transform center)
+        {
+            if (center == null)
+                return false;
+
+            Vector3 position = center.position;
+            if (!IsFiniteVector3(position))
+                return false;
+
+            float mapRadius = _settings != null ? _settings.MapRadius : 65f;
+            float maxAllowedDistance = Mathf.Max(1f, mapRadius - MAP_EDGE_MARGIN + 2f);
+            if (position.sqrMagnitude > maxAllowedDistance * maxAllowedDistance)
+                return false;
+
+            if (!IsNetworkMode)
+                return true;
+
+            Network.NetworkPlayer owner = center.GetComponent<Network.NetworkPlayer>();
+            if (owner == null)
+                owner = center.GetComponentInParent<Network.NetworkPlayer>();
+
+            if (owner == null)
+                return true;
+
+            return !owner.IsDead;
+        }
+
+        private Vector3 ResolveSpawnPositionAroundCenter(Transform center)
+        {
+            Vector3 centerPos = center.position;
+            float mapRadius = _settings != null ? _settings.MapRadius : 65f;
+            mapRadius = Mathf.Max(10f, mapRadius);
+
+            float requestedSpawnRadius = _settings != null ? _settings.GemSpawnRadius : 15f;
+            float effectiveSpawnRadius = Mathf.Min(
+                Mathf.Max(MIN_SPAWN_DISTANCE, requestedSpawnRadius),
+                Mathf.Max(MIN_SPAWN_DISTANCE, mapRadius - MAP_EDGE_MARGIN));
+
+            float maxRadius = Mathf.Max(1f, mapRadius - MAP_EDGE_MARGIN);
+            float maxRadiusSqr = maxRadius * maxRadius;
+
+            // 네트워크 모드는 월드 전역 균등 분포를 우선해 특정 방향 편중을 막는다.
+            if (IsNetworkMode)
+                return ResolveRandomPointInsideMap(maxRadius, centerPos.z);
+
+            for (int attempt = 0; attempt < SPAWN_POSITION_MAX_ATTEMPTS; attempt++)
+            {
+                Vector2 dir = Random.insideUnitCircle;
+                if (dir.sqrMagnitude < 0.0001f)
+                    dir = Vector2.right;
+
+                float dist = Random.Range(MIN_SPAWN_DISTANCE, effectiveSpawnRadius);
+                Vector2 candidate2D = (Vector2)centerPos + dir.normalized * dist;
+                if (candidate2D.sqrMagnitude <= maxRadiusSqr)
+                    return new Vector3(candidate2D.x, candidate2D.y, centerPos.z);
+            }
+
+            // 경계 바깥 후보를 경계로 투영하면 특정 방향(예: 동쪽)으로 편중될 수 있어
+            // 재시도 실패 시에는 맵 내부 균등 랜덤 위치로 폴백한다.
+            return ResolveRandomPointInsideMap(maxRadius, centerPos.z);
+        }
+
+        private static Vector3 ResolveRandomPointInsideMap(float radius, float z)
+        {
+            Vector2 randomPoint = Random.insideUnitCircle * Mathf.Max(1f, radius);
+            return new Vector3(randomPoint.x, randomPoint.y, z);
+        }
+
+        private static bool IsFiniteVector3(Vector3 value)
+        {
+            return !float.IsNaN(value.x) && !float.IsInfinity(value.x)
+                && !float.IsNaN(value.y) && !float.IsInfinity(value.y)
+                && !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+        }
+
         private void SpawnNetworkGem(Vector3 pos)
         {
             if (!NetworkServer.active) return;
+            pos = ClampToMapBounds(pos);
 
             var gemObj = Instantiate(_gemPrefab, pos, Quaternion.identity);
             gemObj.SetActive(false); // NetworkIdentity 초기화 안정화
@@ -286,6 +370,7 @@ namespace World
         public void DropGemAt(Vector3 worldPos)
         {
             if (_gemPrefab == null) return;
+            worldPos = ClampToMapBounds(worldPos);
 
             if (IsNetworkMode)
             {
@@ -307,6 +392,25 @@ namespace World
             _activeGemCount++;
         }
 
+        private Vector3 ClampToMapBounds(Vector3 worldPos)
+        {
+            float mapRadius = _settings != null ? _settings.MapRadius : 65f;
+            float clampRadius = Mathf.Max(1f, mapRadius - MAP_EDGE_MARGIN);
+
+            if (!IsFiniteVector3(worldPos))
+            {
+                Vector2 fallback = Random.insideUnitCircle * clampRadius;
+                return new Vector3(fallback.x, fallback.y, 0f);
+            }
+
+            Vector2 clamped2D = new Vector2(worldPos.x, worldPos.y);
+            float maxSqrRadius = clampRadius * clampRadius;
+            if (clamped2D.sqrMagnitude > maxSqrRadius)
+                clamped2D = clamped2D.normalized * clampRadius;
+
+            return new Vector3(clamped2D.x, clamped2D.y, worldPos.z);
+        }
+
         // === 클라이언트 스폰 핸들러 ===
         private GameObject OnClientSpawnGem(SpawnMessage msg)
         {
@@ -318,7 +422,8 @@ namespace World
                 return empty;
             }
 
-            var gemObj = Instantiate(_gemPrefab, msg.position, msg.rotation);
+            Vector3 clampedPos = ClampToMapBounds(msg.position);
+            var gemObj = Instantiate(_gemPrefab, clampedPos, msg.rotation);
             gemObj.SetActive(false);
             gemObj.transform.localScale = msg.scale;
 

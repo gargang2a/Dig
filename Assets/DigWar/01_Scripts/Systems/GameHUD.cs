@@ -17,6 +17,9 @@ namespace Systems
         [Header("점수 (우측 상단)")]
         [SerializeField] private TMP_Text _scoreText;
 
+        [Header("접속자 수 (우측 하단)")]
+        [SerializeField] private TMP_Text _playerCountText;
+
         [Header("리더보드 (좌측 상단)")]
         [SerializeField] private TMP_Text[] _rankNames = new TMP_Text[8];
         [SerializeField] private TMP_Text[] _rankScores = new TMP_Text[8];
@@ -49,6 +52,8 @@ namespace Systems
         private readonly List<LeaderboardEntry> _entries = new List<LeaderboardEntry>(16);
         private float _updateTimer;
         private const float UPDATE_INTERVAL = 0.5f;
+        private const float PLAYER_COUNT_FONT_SIZE = 24f;
+        private static readonly Color PLAYER_COUNT_COLOR = new Color(1f, 1f, 1f, 0.9f);
 
         private static readonly string[] BOT_NAMES = Network.NetworkBot.BOT_NAMES;
         private MinimapRenderer _minimapRenderer;
@@ -66,6 +71,8 @@ namespace Systems
             // 점수 갱신
             if (_scoreText != null && GameManager.Instance != null)
                 _scoreText.text = $"{GameManager.Instance.CurrentScore:N0}";
+
+            UpdatePlayerCountText();
 
             // 리더보드 주기 갱신
             _updateTimer -= Time.deltaTime;
@@ -89,6 +96,7 @@ namespace Systems
                 Debug.LogWarning("[GameHUD] MainMenuUI is missing in this scene. Start menu flow will be unavailable.");
 
             HideLegacyMinimapDots();
+            EnsurePlayerCountText();
         }
 
         // ===== LEADERBOARD =====
@@ -232,6 +240,60 @@ namespace Systems
             Color color = REMOTE_PLAYER_DOT_COLORS[colorIndex];
             color.a = 1f;
             return color;
+        }
+
+        private void UpdatePlayerCountText()
+        {
+            EnsurePlayerCountText();
+            if (_playerCountText == null) return;
+
+            int hardCap = 24;
+            Network.DigWarNetworkManager networkManager = Network.DigWarNetworkManager.Instance;
+            if (networkManager != null)
+                hardCap = Mathf.Max(1, networkManager.maxConnections);
+
+            int currentPlayers = ResolveCurrentPlayerCount();
+            _playerCountText.text = $"PLAYERS {currentPlayers}/{hardCap}";
+        }
+
+        private int ResolveCurrentPlayerCount()
+        {
+            int replicatedPlayers = Network.NetworkPlayer.ActivePlayers.Count;
+            if (replicatedPlayers > 0)
+                return replicatedPlayers;
+
+            Network.DigWarNetworkManager networkManager = Network.DigWarNetworkManager.Instance;
+            if (networkManager != null && networkManager.numPlayers > 0)
+                return networkManager.numPlayers;
+
+            if (Mirror.NetworkServer.active && Mirror.NetworkServer.connections != null)
+                return Mathf.Max(0, Mirror.NetworkServer.connections.Count);
+
+            return Mirror.NetworkClient.active ? 1 : 0;
+        }
+
+        private void EnsurePlayerCountText()
+        {
+            if (_playerCountText != null)
+                return;
+
+            GameObject textObject = new GameObject("PlayerCountText_Auto", typeof(RectTransform));
+            textObject.transform.SetParent(transform, false);
+
+            RectTransform rect = (RectTransform)textObject.transform;
+            rect.anchorMin = new Vector2(1f, 0f);
+            rect.anchorMax = new Vector2(1f, 0f);
+            rect.pivot = new Vector2(1f, 0f);
+            rect.anchoredPosition = new Vector2(-20f, 20f);
+            rect.sizeDelta = new Vector2(320f, 48f);
+
+            TextMeshProUGUI text = textObject.AddComponent<TextMeshProUGUI>();
+            text.alignment = TextAlignmentOptions.BottomRight;
+            text.fontSize = PLAYER_COUNT_FONT_SIZE;
+            text.color = PLAYER_COUNT_COLOR;
+            text.raycastTarget = false;
+            text.text = "PLAYERS 0/24";
+            _playerCountText = text;
         }
     }
 }

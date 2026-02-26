@@ -21,22 +21,22 @@ namespace Network
     {
         private const int FREE_MVP_HARD_CAP = 24;
         private const int FREE_MVP_SEND_RATE = 15;
-        private const double FREE_MVP_SNAPSHOT_BUFFER_TIME_MULTIPLIER = 4.0d;
-        private const float FREE_MVP_SNAPSHOT_DYNAMIC_TOLERANCE = 2.0f;
-        private const int FREE_MVP_SNAPSHOT_BUFFER_LIMIT = 64;
-        private const float FREE_MVP_SNAPSHOT_CATCHUP_NEGATIVE_THRESHOLD = -1.5f;
-        private const float FREE_MVP_SNAPSHOT_CATCHUP_POSITIVE_THRESHOLD = 1.5f;
-        private const double FREE_MVP_SNAPSHOT_CATCHUP_SPEED = 0.015d;
-        private const double FREE_MVP_SNAPSHOT_SLOWDOWN_SPEED = 0.03d;
-        private const int FREE_MVP_SNAPSHOT_DRIFT_EMA_DURATION = 2;
-        private const int FREE_MVP_SNAPSHOT_DELIVERY_EMA_DURATION = 3;
+        private const double FREE_MVP_SNAPSHOT_BUFFER_TIME_MULTIPLIER = 1.8d;
+        private const float FREE_MVP_SNAPSHOT_DYNAMIC_TOLERANCE = 1.15f;
+        private const int FREE_MVP_SNAPSHOT_BUFFER_LIMIT = 48;
+        private const float FREE_MVP_SNAPSHOT_CATCHUP_NEGATIVE_THRESHOLD = -0.9f;
+        private const float FREE_MVP_SNAPSHOT_CATCHUP_POSITIVE_THRESHOLD = 0.9f;
+        private const double FREE_MVP_SNAPSHOT_CATCHUP_SPEED = 0.04d;
+        private const double FREE_MVP_SNAPSHOT_SLOWDOWN_SPEED = 0.06d;
+        private const int FREE_MVP_SNAPSHOT_DRIFT_EMA_DURATION = 1;
+        private const int FREE_MVP_SNAPSHOT_DELIVERY_EMA_DURATION = 2;
         private const bool FREE_MVP_PLAYER_ONLY_SYNC_ON_CHANGE = false;
-        private const float FREE_MVP_PLAYER_ONLY_SYNC_CORRECTION_MULTIPLIER = 3f;
+        private const float FREE_MVP_PLAYER_ONLY_SYNC_CORRECTION_MULTIPLIER = 2f;
         private const bool FREE_MVP_PLAYER_USE_FIXED_UPDATE = false;
         private const bool FREE_MVP_PLAYER_INTERPOLATE_POSITION = true;
         private const bool FREE_MVP_PLAYER_INTERPOLATE_ROTATION = true;
-        private const float FREE_MVP_PLAYER_POSITION_PRECISION = 0.003f;
-        private const float FREE_MVP_PLAYER_ROTATION_SENSITIVITY = 0.003f;
+        private const float FREE_MVP_PLAYER_POSITION_PRECISION = 0.002f;
+        private const float FREE_MVP_PLAYER_ROTATION_SENSITIVITY = 0.002f;
         private const int FREE_MVP_SIMPLEWEB_SEND_TIMEOUT_MS = 12000;
         private const int FREE_MVP_SIMPLEWEB_RECEIVE_TIMEOUT_MS = 60000;
         private const int FREE_MVP_SIMPLEWEB_SERVER_MAX_MSGS_PER_TICK = 20000;
@@ -45,6 +45,11 @@ namespace Network
         private const string WEB_QUERY_SERVER_KEY = "server";
         private const string WEB_QUERY_PORT_KEY = "port";
         private const string WEB_QUERY_WSS_KEY = "wss";
+        private const string WEB_QUERY_DEBUG_KEY = "debug";
+        private const string WEB_QUERY_DEBUG_HUD_KEY = "debughud";
+        private const string WEB_DEFAULT_REMOTE_HOST = "server.digclash.com";
+        private const ushort WEB_DEFAULT_REMOTE_PORT = 443;
+        private const bool WEB_DEFAULT_REMOTE_USE_WSS = true;
         private const string CMD_MODE_KEY = "dw-mode";
         private const string CMD_ADDRESS_KEY = "dw-address";
         private const string CMD_PORT_KEY = "dw-port";
@@ -89,7 +94,7 @@ namespace Network
         #pragma warning restore CS0414
 
         [Tooltip("Client 모드에서 기본 접속 주소")]
-        [SerializeField] private string _defaultClientAddress = "localhost";
+        [SerializeField] private string _defaultClientAddress = WEB_DEFAULT_REMOTE_HOST;
 
         [Tooltip("에디터 Clone 감지 토큰 (Application.dataPath 기준)")]
         [SerializeField] private string _clonePathToken = "_clone";
@@ -130,11 +135,13 @@ namespace Network
             base.Awake();
             Instance = this;
             ApplyFreeMvpRuntimeProfile(logWarnings: true);
+            ApplyRuntimeDebugPanelPolicy();
         }
 
         public override void Start()
         {
             base.Start();
+            ApplyWebClientDefaults();
             ApplyWebClientOverridesFromUrl();
             ApplyCommandLineOverrides();
 
@@ -233,9 +240,7 @@ namespace Network
                     return;
 
                 case AutoStartMode.Client:
-                    string defaultAddress = string.IsNullOrWhiteSpace(_defaultClientAddress)
-                        ? "localhost"
-                        : _defaultClientAddress.Trim();
+                    string defaultAddress = ResolveDefaultClientAddress();
 
                     if (string.IsNullOrWhiteSpace(networkAddress))
                         networkAddress = defaultAddress;
@@ -404,6 +409,54 @@ namespace Network
             return $"Network error while connecting{endpointLabel}. Please retry shortly.";
         }
 
+        private void ApplyWebClientDefaults()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            if (!(transport is SimpleWebTransport simpleWebTransport))
+                return;
+
+            bool changed = false;
+            string defaultAddress = ResolveDefaultClientAddress();
+
+            if (!string.Equals(networkAddress, defaultAddress, StringComparison.OrdinalIgnoreCase))
+            {
+                networkAddress = defaultAddress;
+                changed = true;
+            }
+
+            if (simpleWebTransport.port != WEB_DEFAULT_REMOTE_PORT)
+            {
+                simpleWebTransport.port = WEB_DEFAULT_REMOTE_PORT;
+                changed = true;
+            }
+
+            if (simpleWebTransport.clientWebsocketSettings.ClientPortOption != WebsocketPortOption.SpecifyPort)
+            {
+                simpleWebTransport.clientWebsocketSettings.ClientPortOption = WebsocketPortOption.SpecifyPort;
+                changed = true;
+            }
+
+            if (simpleWebTransport.clientWebsocketSettings.CustomClientPort != WEB_DEFAULT_REMOTE_PORT)
+            {
+                simpleWebTransport.clientWebsocketSettings.CustomClientPort = WEB_DEFAULT_REMOTE_PORT;
+                changed = true;
+            }
+
+            if (simpleWebTransport.clientUseWss != WEB_DEFAULT_REMOTE_USE_WSS)
+            {
+                simpleWebTransport.clientUseWss = WEB_DEFAULT_REMOTE_USE_WSS;
+                changed = true;
+            }
+
+            if (changed)
+            {
+                Debug.Log(
+                    $"[Network] WebGL default endpoint applied: endpoint={ResolveClientEndpoint()}, " +
+                    $"clientUseWss={simpleWebTransport.clientUseWss}");
+            }
+#endif
+        }
+
         private void ApplyWebClientOverridesFromUrl()
         {
 #if UNITY_WEBGL && !UNITY_EDITOR
@@ -416,7 +469,7 @@ namespace Network
 
             bool changed = false;
             string effectiveAddress = string.IsNullOrWhiteSpace(networkAddress)
-                ? _defaultClientAddress
+                ? ResolveDefaultClientAddress()
                 : networkAddress;
 
             if (TryGetQueryParameter(absoluteUrl, WEB_QUERY_SERVER_KEY, out string serverRaw))
@@ -679,6 +732,44 @@ namespace Network
             Debug.Log("[Network] Dedicated server gameplay loop auto-started.");
         }
 
+        private void ApplyRuntimeDebugPanelPolicy()
+        {
+#if UNITY_EDITOR
+            return;
+#else
+            if (ShouldKeepRuntimeDebugPanelsEnabled())
+                return;
+
+            NetworkManagerHUD networkManagerHud = GetComponent<NetworkManagerHUD>();
+            if (networkManagerHud != null && networkManagerHud.enabled)
+            {
+                networkManagerHud.enabled = false;
+                Debug.Log("[Network] Runtime presentation mode: NetworkManagerHUD disabled.");
+            }
+#endif
+        }
+
+        private bool ShouldKeepRuntimeDebugPanelsEnabled()
+        {
+#if UNITY_EDITOR
+            return true;
+#elif UNITY_WEBGL
+            string absoluteUrl = Application.absoluteURL ?? string.Empty;
+            return IsEnabledQueryFlag(absoluteUrl, WEB_QUERY_DEBUG_KEY) ||
+                   IsEnabledQueryFlag(absoluteUrl, WEB_QUERY_DEBUG_HUD_KEY);
+#else
+            return Debug.isDebugBuild;
+#endif
+        }
+
+        private static bool IsEnabledQueryFlag(string absoluteUrl, string key)
+        {
+            if (!TryGetQueryParameter(absoluteUrl, key, out string rawValue))
+                return false;
+
+            return TryParseBooleanFlag(rawValue, out bool enabled) && enabled;
+        }
+
         private static bool TryGetQueryParameter(string absoluteUrl, string key, out string value)
         {
             value = string.Empty;
@@ -785,12 +876,24 @@ namespace Network
             return false;
         }
 
+        private string ResolveDefaultClientAddress()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return WEB_DEFAULT_REMOTE_HOST;
+#else
+            string configuredAddress = string.IsNullOrWhiteSpace(_defaultClientAddress)
+                ? "localhost"
+                : _defaultClientAddress.Trim();
+            return configuredAddress;
+#endif
+        }
+
         private string ResolveClientEndpoint()
         {
             string address = string.IsNullOrWhiteSpace(networkAddress)
-                ? _defaultClientAddress
+                ? ResolveDefaultClientAddress()
                 : networkAddress;
-            address = string.IsNullOrWhiteSpace(address) ? "localhost" : address.Trim();
+            address = string.IsNullOrWhiteSpace(address) ? ResolveDefaultClientAddress() : address.Trim();
 
             ushort port = 0;
             if (Transport.active is PortTransport activePortTransport)

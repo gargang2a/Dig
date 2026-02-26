@@ -173,7 +173,11 @@ namespace Network
                 _playerController = GetComponent<Player.PlayerController>();
 
             TryHandleAutoRespawn();
-            if (!CanSendCommands) return;
+            if (!CanSendCommands)
+            {
+                ReconcileStalePredictedScore();
+                return;
+            }
 
             SyncAssaultState();
 
@@ -202,6 +206,8 @@ namespace Network
                     }
                 }
             }
+
+            ReconcileStalePredictedScore();
         }
 
         private void TickRemoteRespawnFallback()
@@ -281,40 +287,43 @@ namespace Network
         private Vector2 _lastServerPosition;
         private float _lastServerPositionSampleAt;
         private float _serverSpeedEstimate;
+        private float _pendingPredictedScore;
+        private float _pendingPredictedScoreExpireAt = -1f;
+        private float _hazardRespawnProtectionUntil;
         private int _killRejectAssaultCount;
         private int _killRejectCooldownCount;
         private int _killRejectDistanceCount;
         private float _killRejectSummaryNextLogAt;
         private string _lastKillRejectDetail;
-        private const float SCORE_SYNC_INTERVAL = 0.3f;
+        private const float SCORE_SYNC_INTERVAL = 0.12f;
         private const float ASSAULT_SYNC_INTERVAL = 0.1f;
         private const float SCORE_SYNC_GUARD_SECONDS = 0.4f;
-        private const float KILL_REWARD_SCORE = 50f;
+        private const float DEFAULT_KILL_REWARD_SCORE = 35f;
         private const float KILL_REQUEST_COOLDOWN_SECONDS = 0.03f;
         private const float ASSAULT_STATE_GRACE_SECONDS = 0.35f;
-        private const float BASE_KILL_RANGE_BUFFER = 0.35f;
-        private const float RTT_KILL_RANGE_BUFFER_FACTOR = 3f;
-        private const float MAX_RTT_KILL_RANGE_BUFFER = 0.7f;
+        private const float BASE_KILL_RANGE_BUFFER = 0.45f;
+        private const float RTT_KILL_RANGE_BUFFER_FACTOR = 3.8f;
+        private const float MAX_RTT_KILL_RANGE_BUFFER = 0.9f;
         private const float BOT_KILL_RANGE_BONUS = 0.25f;
-        private const float PLAYER_KILL_RANGE_BONUS = 0.35f;
-        private const float MAX_KILL_RANGE_BUFFER = 1.5f;
+        private const float PLAYER_KILL_RANGE_BONUS = 0.45f;
+        private const float MAX_KILL_RANGE_BUFFER = 1.8f;
         private const float BOT_KILL_FAILSAFE_BONUS = 4.5f;
         private const float PLAYER_KILL_FAILSAFE_BONUS = 5.5f;
         private const float MAX_BOT_KILL_FAILSAFE_DISTANCE = 6.8f;
-        private const float MAX_PLAYER_KILL_FAILSAFE_DISTANCE = 8.0f;
+        private const float MAX_PLAYER_KILL_FAILSAFE_DISTANCE = 9.0f;
         private const float CLIENT_REPORTED_DISTANCE_COMPENSATION_BOT = 1.35f;
-        private const float CLIENT_REPORTED_DISTANCE_COMPENSATION_PLAYER = 1.05f;
+        private const float CLIENT_REPORTED_DISTANCE_COMPENSATION_PLAYER = 1.2f;
         private const float MAX_CLIENT_REPORTED_BOT_KILL_DISTANCE = 7.8f;
-        private const float MAX_CLIENT_REPORTED_PLAYER_KILL_DISTANCE = 8.6f;
+        private const float MAX_CLIENT_REPORTED_PLAYER_KILL_DISTANCE = 9.2f;
         private const float CLIENT_REPORTED_DRIFT_BASE = 1.5f;
-        private const float CLIENT_REPORTED_DRIFT_RTT_FACTOR = 16f;
+        private const float CLIENT_REPORTED_DRIFT_RTT_FACTOR = 18f;
         private const float CLIENT_REPORTED_DRIFT_SPEED_FACTOR = 0.45f;
         private const float CLIENT_REPORTED_DRIFT_SPEED_CAP_BOT = 6.5f;
         private const float CLIENT_REPORTED_DRIFT_SPEED_CAP_PLAYER = 5.0f;
         private const float CLIENT_REPORTED_DRIFT_MAX_BOT = 9.5f;
-        private const float CLIENT_REPORTED_DRIFT_MAX_PLAYER = 7.5f;
+        private const float CLIENT_REPORTED_DRIFT_MAX_PLAYER = 8.2f;
         private const float CLIENT_REPORTED_DRIFT_GRACE_BOT = 0.9f;
-        private const float CLIENT_REPORTED_DRIFT_GRACE_PLAYER = 0.6f;
+        private const float CLIENT_REPORTED_DRIFT_GRACE_PLAYER = 0.8f;
         private const float KILL_REJECT_SUMMARY_INTERVAL_SECONDS = 4.0f;
         private const float MAX_SERVER_SPEED_ESTIMATE = 40f;
         private const float FALLBACK_COLLIDER_RADIUS = 0.3f;
@@ -322,6 +331,11 @@ namespace Network
         private const float PLAYER_CONTACT_TOLERANCE_BONUS = 0.1f;
         private const float AUTO_RESPAWN_DELAY_SECONDS = 1.0f;
         private const float REMOTE_RESPAWN_FALLBACK_DELAY_SECONDS = 0.2f;
+        private const float PREDICTED_SCORE_RECONCILE_TIMEOUT_SECONDS = 0.65f;
+        private const float CLIENT_SCORE_UPSYNC_EPSILON = 0.1f;
+        private const float RESPAWN_SANDWORM_SAFE_DISTANCE = 6.5f;
+        private const int RESPAWN_POSITION_MAX_ATTEMPTS = 20;
+        private const float HAZARD_RESPAWN_PROTECTION_SECONDS = 1.0f;
         private static bool _killDistanceConfigLogged;
 
         // ===== Commands (클라이언트 -> 서버) =====
@@ -343,7 +357,15 @@ namespace Network
         {
             // 서버 권한 점수 갱신 직후에는 짧은 시간 동안 클라이언트 값을 무시한다.
             if (Time.time < _ignoreClientScoreSyncUntil) return;
-            Score = Mathf.Max(0f, score);
+
+            float sanitizedScore = Mathf.Max(0f, score);
+
+            // 서버 권한 원칙: 클라이언트는 점수 감소(부스트 소모)만 반영하고
+            // 점수 증가(젬/킬)는 ServerAddScore 경로로만 확정한다.
+            if (sanitizedScore > Score + CLIENT_SCORE_UPSYNC_EPSILON)
+                return;
+
+            Score = sanitizedScore;
             UpdateSyncedScaleFromScore();
         }
 
@@ -353,7 +375,25 @@ namespace Network
             _isAssaultActive = isAssaultActive && !IsDead;
             if (_isAssaultActive)
                 _lastAssaultActivatedAt = Time.time;
-            }
+        }
+
+        [Command]
+        public void CmdRequestCollectGem(NetworkIdentity gemIdentity, Vector2 collectorReportedPos, Vector2 gemReportedPos)
+        {
+            ServerProcessGemCollectRequest(gemIdentity, collectorReportedPos, gemReportedPos);
+        }
+
+        [Server]
+        private void ServerProcessGemCollectRequest(NetworkIdentity gemIdentity, Vector2 collectorReportedPos, Vector2 gemReportedPos)
+        {
+            if (IsDead) return;
+            if (gemIdentity == null) return;
+
+            World.Gem gem = gemIdentity.GetComponent<World.Gem>();
+            if (gem == null) return;
+
+            gem.ServerTryCollectFromRequest(this, collectorReportedPos, gemReportedPos);
+        }
 
         /// <summary>
         /// 서버에서 플레이어 점수를 증가시킨다.
@@ -406,6 +446,7 @@ namespace Network
             _isAssaultActive = false;
             _nextKillRequestAllowedAt = 0f;
             _lastAssaultActivatedAt = 0f;
+            _hazardRespawnProtectionUntil = Time.time + HAZARD_RESPAWN_PROTECTION_SECONDS;
             UpdateSyncedScaleFromScore();
             _ignoreClientScoreSyncUntil = Time.time + SCORE_SYNC_GUARD_SECONDS;
             RpcApplyRespawnState(respawnPosition);
@@ -415,19 +456,89 @@ namespace Network
         [Server]
         private Vector2 ResolveServerValidatedRespawnPosition(Vector2 reportedRespawnPosition)
         {
-            float mapRadius = 15f;
+            float mapRadius = 32.5f;
             if (Core.GameManager.Instance != null && Core.GameManager.Instance.Settings != null)
-                mapRadius = Core.GameManager.Instance.Settings.MapRadius * 0.5f;
+            {
+                var settings = Core.GameManager.Instance.Settings;
+                mapRadius = settings.MapRadius * settings.RespawnRadiusRatio;
+            }
             mapRadius = Mathf.Max(1f, mapRadius);
 
+            Vector2 candidate;
             if (!IsFiniteVector2(reportedRespawnPosition))
-                return UnityEngine.Random.insideUnitCircle * mapRadius;
+            {
+                candidate = UnityEngine.Random.insideUnitCircle * mapRadius;
+            }
+            else
+            {
+                candidate = reportedRespawnPosition;
+            }
 
             float maxSqrRadius = mapRadius * mapRadius;
-            if (reportedRespawnPosition.sqrMagnitude > maxSqrRadius)
-                reportedRespawnPosition = reportedRespawnPosition.normalized * mapRadius;
+            if (candidate.sqrMagnitude > maxSqrRadius)
+                candidate = candidate.normalized * mapRadius;
 
-            return reportedRespawnPosition;
+            // 샌드웜 근접 즉사 구간을 피하도록 리스폰 후보를 재탐색한다.
+            if (IsRespawnPositionSafeFromSandworms(candidate))
+                return candidate;
+
+            Vector2 bestCandidate = candidate;
+            float bestSafetyDistance = EvaluateClosestSandwormDistance(candidate);
+
+            for (int i = 0; i < RESPAWN_POSITION_MAX_ATTEMPTS; i++)
+            {
+                Vector2 sample = UnityEngine.Random.insideUnitCircle * mapRadius;
+                float safetyDistance = EvaluateClosestSandwormDistance(sample);
+                if (safetyDistance > bestSafetyDistance)
+                {
+                    bestSafetyDistance = safetyDistance;
+                    bestCandidate = sample;
+                }
+
+                if (safetyDistance >= RESPAWN_SANDWORM_SAFE_DISTANCE)
+                    return sample;
+            }
+
+            Debug.LogWarning(
+                $"[Respawn] Unsafe requested position adjusted for {ResolveDisplayName()} " +
+                $"(closestSandwormDist={bestSafetyDistance:F2})");
+            return bestCandidate;
+        }
+
+        [Server]
+        private bool IsRespawnPositionSafeFromSandworms(Vector2 position)
+        {
+            return EvaluateClosestSandwormDistance(position) >= RESPAWN_SANDWORM_SAFE_DISTANCE;
+        }
+
+        [Server]
+        private static float EvaluateClosestSandwormDistance(Vector2 position)
+        {
+            float closestDistance = float.PositiveInfinity;
+
+            foreach (World.Sandworm worm in World.Sandworm.ActiveWorms)
+            {
+                if (worm == null) continue;
+
+                float headDistance = Vector2.Distance(position, worm.transform.position);
+                if (headDistance < closestDistance)
+                    closestDistance = headDistance;
+
+                var segments = worm.Segments;
+                if (segments == null) continue;
+
+                for (int i = 0; i < segments.Count; i++)
+                {
+                    Transform segment = segments[i];
+                    if (segment == null) continue;
+
+                    float segmentDistance = Vector2.Distance(position, segment.position);
+                    if (segmentDistance < closestDistance)
+                        closestDistance = segmentDistance;
+                }
+            }
+
+            return closestDistance;
         }
 
         private static bool IsFiniteVector2(Vector2 value)
@@ -531,7 +642,9 @@ namespace Network
                     return;
 
                 _nextKillRequestAllowedAt = Time.time + KILL_REQUEST_COOLDOWN_SECONDS;
-                ServerAddScore(KILL_REWARD_SCORE, playCollectSound: false);
+                ServerAddScore(ResolveKillRewardScore(), playCollectSound: false);
+                if (connectionToClient != null)
+                    TargetPlayKillConfirm(connectionToClient);
                 Debug.Log($"[PvP] {ResolveDisplayName()} -> {ResolveDisplayName(target)} 처치");
                 return;
             }
@@ -568,7 +681,9 @@ namespace Network
                 botDigger.Die();
                 if (botController != null && !botController.IsDead) return;
                 _nextKillRequestAllowedAt = Time.time + KILL_REQUEST_COOLDOWN_SECONDS;
-                ServerAddScore(KILL_REWARD_SCORE, playCollectSound: false);
+                ServerAddScore(ResolveKillRewardScore(), playCollectSound: false);
+                if (connectionToClient != null)
+                    TargetPlayKillConfirm(connectionToClient);
                 Debug.Log($"[PvP] {ResolveDisplayName()} -> {ResolveDisplayName(target)} 처치");
             }
         }
@@ -577,6 +692,17 @@ namespace Network
         public bool ServerDieFromHazard(string hazardName)
         {
             string source = string.IsNullOrWhiteSpace(hazardName) ? "Hazard" : hazardName.Trim();
+
+            if (string.Equals(source, "Sandworm", System.StringComparison.OrdinalIgnoreCase)
+                && Time.time < _hazardRespawnProtectionUntil)
+            {
+                float remaining = Mathf.Max(0f, _hazardRespawnProtectionUntil - Time.time);
+                Debug.Log(
+                    $"[{source}] {ResolveDisplayName()} protected after respawn " +
+                    $"({remaining:F2}s remaining)");
+                return false;
+            }
+
             return ServerDieFromServerEvent(source, "System");
         }
 
@@ -612,12 +738,68 @@ namespace Network
         [TargetRpc]
         private void TargetApplyServerScore(NetworkConnectionToClient target, float amount, bool playCollectSound)
         {
+            float applyAmount = Mathf.Max(0f, amount);
+            if (_pendingPredictedScore > 0f && applyAmount > 0f)
+            {
+                float consumed = Mathf.Min(_pendingPredictedScore, applyAmount);
+                _pendingPredictedScore -= consumed;
+                applyAmount -= consumed;
+
+                if (_pendingPredictedScore <= 0.0001f)
+                {
+                    _pendingPredictedScore = 0f;
+                    _pendingPredictedScoreExpireAt = -1f;
+                }
+            }
+
             var pc = GetComponent<Player.PlayerController>();
-            if (pc != null)
-                pc.AddScore(amount);
+            if (pc != null && applyAmount > 0f)
+                pc.AddScore(applyAmount);
 
             if (playCollectSound && Systems.SoundManager.Instance != null)
                 Systems.SoundManager.Instance.PlayGemCollect();
+        }
+
+        [Client]
+        public void ClientPredictGemCollect(float amount)
+        {
+            if (!isLocalPlayer) return;
+
+            float safeAmount = Mathf.Max(0f, amount);
+            if (safeAmount <= 0f) return;
+
+            _pendingPredictedScore += safeAmount;
+            _pendingPredictedScoreExpireAt = Time.unscaledTime + PREDICTED_SCORE_RECONCILE_TIMEOUT_SECONDS;
+
+            var pc = GetComponent<Player.PlayerController>();
+            if (pc != null)
+                pc.AddScore(safeAmount);
+        }
+
+        [Client]
+        private void ReconcileStalePredictedScore()
+        {
+            if (!isLocalPlayer) return;
+            if (_pendingPredictedScore <= 0f) return;
+            if (_pendingPredictedScoreExpireAt < 0f) return;
+            if (Time.unscaledTime < _pendingPredictedScoreExpireAt) return;
+
+            float rollbackAmount = _pendingPredictedScore;
+            _pendingPredictedScore = 0f;
+            _pendingPredictedScoreExpireAt = -1f;
+
+            var pc = GetComponent<Player.PlayerController>();
+            if (pc != null && rollbackAmount > 0f)
+                pc.AddScore(-rollbackAmount);
+
+            Debug.Log($"[Gem][Predict] stale rollback applied: {rollbackAmount:F2}");
+        }
+
+        [TargetRpc]
+        private void TargetPlayKillConfirm(NetworkConnectionToClient target)
+        {
+            if (Systems.SoundManager.Instance != null)
+                Systems.SoundManager.Instance.PlayKillConfirm();
         }
 
         // ===== SyncVar Hooks =====
@@ -634,6 +816,12 @@ namespace Network
         {
             if (oldVal == true && newVal == false)
                 _autoRespawnReadyAt = -1f;
+
+            if (newVal)
+            {
+                _pendingPredictedScore = 0f;
+                _pendingPredictedScoreExpireAt = -1f;
+            }
 
             if (isLocalPlayer)
                 return;
@@ -1017,6 +1205,16 @@ namespace Network
         private void UpdateSyncedScaleFromScore()
         {
             _syncedScale = ResolveScaleFromScore(Score);
+        }
+
+        [Server]
+        private float ResolveKillRewardScore()
+        {
+            GameSettings settings = Core.GameManager.Instance?.Settings;
+            if (settings == null)
+                return DEFAULT_KILL_REWARD_SCORE;
+
+            return Mathf.Max(0f, settings.KillRewardScore);
         }
 
         private float ResolveScaleFromScore(float score)

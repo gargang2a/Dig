@@ -5,7 +5,7 @@
     [int]$BotIndexSpikeMultiplier = 4,
     [int]$BotDistinctSpikeMultiplier = 24,
     [int]$BotIndexHardCheckThreshold = 512,
-    [int]$MaxAllowedSandworms = 3,
+    [int]$MaxAllowedSandworms = 9,
     [switch]$UseLatestServerSessionScope
 )
 
