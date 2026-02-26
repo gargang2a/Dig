@@ -23,6 +23,7 @@ namespace Player
 
         private Core.MoleGrowth _growth;
         private Tunnel.TunnelGenerator _tunnelGen;
+        private Network.NetworkPlayer _networkPlayer;
 
         private Camera _mainCamera;
         private GameSettings _settings;
@@ -34,6 +35,9 @@ namespace Player
         private Vector3 _autoMoveTarget;
         private float _nextAutoRetargetAt;
         private float _autoRespawnAt = -1f;
+        private float _boostSpentScoreAccumulator;
+        private float _respawnInvincibleUntil = -1f;
+        private SpriteRenderer _primarySpriteRenderer;
 
         private const float NETWORK_KILL_REQUEST_INTERVAL = 0.02f;
         private const float AUTO_MOVE_RETARGET_INTERVAL = 1.2f;
@@ -42,6 +46,11 @@ namespace Player
         private const float AUTO_TARGET_MAX_SEARCH_DISTANCE = 40f;
         private const float LOCAL_RESPAWN_TUNNEL_RESUME_DELAY_SECONDS = 0.35f;
         private const float REMOTE_RESPAWN_TUNNEL_RESUME_DELAY_SECONDS = 0.9f;
+        private const int BOOST_DROP_MAX_PER_MOVE = 6;
+        private const float BOOST_DROP_PATH_JITTER = 0.2f;
+        private const float RESPAWN_INVINCIBILITY_SECONDS = 1.0f;
+        private const float RESPAWN_BLINK_SPEED = 14.0f;
+        private const float RESPAWN_BLINK_MIN_ALPHA = 0.35f;
 
         private static bool _globalAutoModeEnabled;
 
@@ -53,6 +62,7 @@ namespace Player
             _growth = GetComponent<Core.MoleGrowth>();
             if (_growth == null) _growth = gameObject.AddComponent<Core.MoleGrowth>();
             _tunnelGen = GetComponent<Tunnel.TunnelGenerator>();
+            _networkPlayer = GetComponent<Network.NetworkPlayer>();
         }
 
         private void Start()
@@ -75,6 +85,8 @@ namespace Player
 
         private void Update()
         {
+            UpdateRespawnInvincibilityVisual();
+
             bool autoModeActive = IsAutoModeActive;
             if (_isDead || !GameManager.Instance.IsGameActive)
             {
@@ -152,15 +164,13 @@ namespace Player
 
         private void TryPromoteAsLocal()
         {
-            var networkPlayer = GetComponent<Network.NetworkPlayer>();
-            if (networkPlayer == null || networkPlayer.isLocalPlayer)
+            if (_networkPlayer == null || _networkPlayer.isLocalPlayer)
                 LocalController = this;
         }
 
         private bool IsLocalControllable()
         {
-            var networkPlayer = GetComponent<Network.NetworkPlayer>();
-            return networkPlayer == null || networkPlayer.isLocalPlayer;
+            return _networkPlayer == null || _networkPlayer.isLocalPlayer;
         }
 
         private void OnAutoModeChanged(bool enabled)
@@ -178,7 +188,7 @@ namespace Player
         {
             Vector3 targetPosition = ResolveAutoMoveTarget();
             RotateTowards(targetPosition);
-            _isAttacking = true;
+            _isAttacking = !IsRespawnInvincible;
             Move();
         }
 
@@ -283,6 +293,12 @@ namespace Player
 
         private void HandleInput()
         {
+            if (IsRespawnInvincible)
+            {
+                _isAttacking = false;
+                return;
+            }
+
             _isAttacking = Input.GetMouseButton(0);
             // 터널은 항상 생성하며, LMB는 부스트/공격에만 사용한다.
         }
@@ -292,13 +308,16 @@ namespace Player
         /// </summary>
         private void Move()
         {
+            Vector3 previousPosition = transform.position;
             float speed = _settings.BaseSpeed * transform.localScale.x;
-            bool canBoost = _isAttacking && GameManager.Instance.CurrentScore > 0f;
+            bool canBoost = _isAttacking && !IsRespawnInvincible && GameManager.Instance.CurrentScore > 0f;
+            float spentScore = 0f;
 
             if (canBoost)
             {
                 speed *= _settings.BoostMultiplier;
                 float cost = _settings.BoostScoreCostPerSecond * Time.deltaTime;
+                spentScore = Mathf.Max(0f, cost);
 
                 // 전역 점수(UI)와 성장 점수(크기)를 함께 차감
                 GameManager.Instance.AddScore(-cost);
@@ -307,6 +326,62 @@ namespace Player
 
             CurrentSpeed = speed;
             transform.position += transform.up * (speed * Time.deltaTime);
+
+            if (spentScore > 0f)
+                EmitBoostGemDrops(spentScore, previousPosition, transform.position);
+        }
+
+        private void EmitBoostGemDrops(float spentScore, Vector3 fromPosition, Vector3 toPosition)
+        {
+            float gemScoreUnit = ResolveGemScoreUnit();
+            if (gemScoreUnit <= 0f)
+                return;
+
+            _boostSpentScoreAccumulator += Mathf.Max(0f, spentScore);
+            int spawnCount = Mathf.FloorToInt(_boostSpentScoreAccumulator / gemScoreUnit);
+            if (spawnCount <= 0)
+                return;
+
+            spawnCount = Mathf.Min(spawnCount, BOOST_DROP_MAX_PER_MOVE);
+            _boostSpentScoreAccumulator = Mathf.Max(0f, _boostSpentScoreAccumulator - (gemScoreUnit * spawnCount));
+
+            for (int i = 0; i < spawnCount; i++)
+            {
+                float t = (i + 1f) / (spawnCount + 1f);
+                Vector3 dropPosition = Vector3.Lerp(fromPosition, toPosition, t);
+                Vector2 jitter = Random.insideUnitCircle * BOOST_DROP_PATH_JITTER;
+                dropPosition.x += jitter.x;
+                dropPosition.y += jitter.y;
+                DropSpentGemAt(dropPosition);
+            }
+        }
+
+        private float ResolveGemScoreUnit()
+        {
+            if (_settings == null)
+                return 8f;
+
+            return Mathf.Max(0.1f, _settings.GemScore);
+        }
+
+        private void DropSpentGemAt(Vector3 worldPosition)
+        {
+            World.GemSpawner spawner = World.GemSpawner.Instance;
+            if (spawner == null)
+                return;
+
+            bool isNetworkMode = _networkPlayer != null || NetworkClient.active || NetworkServer.active;
+            if (isNetworkMode)
+            {
+                if (_networkPlayer == null || !_networkPlayer.isLocalPlayer)
+                    return;
+
+                float currentScore = GameManager.Instance != null ? GameManager.Instance.CurrentScore : 0f;
+                _networkPlayer.RequestBoostGemDrop(worldPosition, currentScore);
+                return;
+            }
+
+            spawner.DropGemAt(worldPosition, forceDrop: true);
         }
 
         /// <summary>현재 프레임의 실제 이동 속도(부스트 포함).</summary>
@@ -317,6 +392,87 @@ namespace Player
 
         /// <summary>공격 모드(Assault) 여부.</summary>
         public bool IsAttacking => _isAttacking;
+
+        /// <summary>리스폰 직후 무적 상태 여부.</summary>
+        public bool IsRespawnInvincible => !_isDead && Time.time < _respawnInvincibleUntil;
+
+        private void BeginRespawnInvincibility(float durationSeconds = RESPAWN_INVINCIBILITY_SECONDS)
+        {
+            if (durationSeconds <= 0f)
+            {
+                StopRespawnInvincibility(resetVisual: true);
+                return;
+            }
+
+            _respawnInvincibleUntil = Time.time + durationSeconds;
+            ApplyRespawnBlinkVisual(Time.time);
+        }
+
+        private void StopRespawnInvincibility(bool resetVisual)
+        {
+            _respawnInvincibleUntil = -1f;
+            if (resetVisual)
+                ResetRespawnBlinkVisual();
+        }
+
+        private void UpdateRespawnInvincibilityVisual()
+        {
+            if (_isDead)
+                return;
+
+            if (IsRespawnInvincible)
+            {
+                ApplyRespawnBlinkVisual(Time.time);
+                return;
+            }
+
+            if (_respawnInvincibleUntil >= 0f)
+                StopRespawnInvincibility(resetVisual: true);
+        }
+
+        private void ApplyRespawnBlinkVisual(float currentTime)
+        {
+            SpriteRenderer sr = ResolvePrimarySpriteRenderer();
+            if (sr == null)
+                return;
+
+            float baseAlpha = Mathf.Clamp01(Mathf.Max(0.05f, _originalColor.a));
+            float pulse = Mathf.PingPong(currentTime * RESPAWN_BLINK_SPEED, 1f);
+            float alpha = Mathf.Lerp(RESPAWN_BLINK_MIN_ALPHA * baseAlpha, baseAlpha, pulse);
+
+            Color blinkColor = _originalColor;
+            blinkColor.a = alpha;
+            sr.color = blinkColor;
+        }
+
+        private void ResetRespawnBlinkVisual()
+        {
+            SpriteRenderer sr = ResolvePrimarySpriteRenderer();
+            if (sr == null)
+                return;
+
+            sr.color = _originalColor;
+        }
+
+        private SpriteRenderer ResolvePrimarySpriteRenderer()
+        {
+            if (_primarySpriteRenderer != null)
+                return _primarySpriteRenderer;
+
+            if (_visualRoot != null)
+            {
+                _primarySpriteRenderer = _visualRoot.GetComponent<SpriteRenderer>();
+                if (_primarySpriteRenderer != null)
+                    return _primarySpriteRenderer;
+
+                _primarySpriteRenderer = _visualRoot.GetComponentInChildren<SpriteRenderer>(true);
+                if (_primarySpriteRenderer != null)
+                    return _primarySpriteRenderer;
+            }
+
+            _primarySpriteRenderer = GetComponentInChildren<SpriteRenderer>(true);
+            return _primarySpriteRenderer;
+        }
 
         /// <summary>
         /// 마우스 방향으로 회전한다.
@@ -372,6 +528,7 @@ namespace Player
         {
             if (_isDead) return;
             if (!_isAttacking) return;
+            if (IsRespawnInvincible) return;
 
             Network.NetworkPlayer myNetPlayer = GetComponent<Network.NetworkPlayer>();
             bool isNetworkMode = myNetPlayer != null || NetworkClient.active || NetworkServer.active;
@@ -462,6 +619,8 @@ namespace Player
             CurrentSpeed = 0f;
             _isAttacking = false;
             _autoRespawnAt = -1f;
+            _boostSpentScoreAccumulator = 0f;
+            StopRespawnInvincibility(resetVisual: true);
 
             // 로컬 플레이어만 GameOver UI 트리거
             var netPlayer = GetComponent<Network.NetworkPlayer>();
@@ -514,6 +673,7 @@ namespace Player
             _isAttacking = false;
             _nextAutoRetargetAt = 0f;
             _autoMoveTarget = respawnPosition;
+            _boostSpentScoreAccumulator = 0f;
 
             Vector3 snappedRespawnPosition = new Vector3(respawnPosition.x, respawnPosition.y, transform.position.z);
             transform.position = snappedRespawnPosition;
@@ -532,6 +692,8 @@ namespace Player
 
             if (_growth != null)
                 _growth.SetScore(0f);
+
+            BeginRespawnInvincibility();
 
             if (_tunnelGen != null)
             {
@@ -553,6 +715,7 @@ namespace Player
             _nextNetworkKillRequestAt = 0f;
             _autoRespawnAt = -1f;
             _isAttacking = false;
+            _boostSpentScoreAccumulator = 0f;
 
             // 랜덤 위치로 리스폰
             var settings = GameManager.Instance != null ? GameManager.Instance.Settings : _settings;
@@ -582,6 +745,8 @@ namespace Player
             // MoleGrowth 크기 초기화
             if (_growth != null)
                 _growth.SetScore(0f);
+
+            BeginRespawnInvincibility();
 
             // 터널 생성 재시작
             if (_tunnelGen != null)

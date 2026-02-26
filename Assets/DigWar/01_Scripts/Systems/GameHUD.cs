@@ -17,8 +17,9 @@ namespace Systems
         [Header("점수 (우측 상단)")]
         [SerializeField] private TMP_Text _scoreText;
 
-        [Header("접속자 수 (우측 하단)")]
+        [Header("접속자 수 (좌측 하단)")]
         [SerializeField] private TMP_Text _playerCountText;
+        [SerializeField] private TMP_FontAsset _playerCountFont;
 
         [Header("리더보드 (좌측 상단)")]
         [SerializeField] private TMP_Text[] _rankNames = new TMP_Text[8];
@@ -52,8 +53,13 @@ namespace Systems
         private readonly List<LeaderboardEntry> _entries = new List<LeaderboardEntry>(16);
         private float _updateTimer;
         private const float UPDATE_INTERVAL = 0.5f;
-        private const float PLAYER_COUNT_FONT_SIZE = 24f;
+        private const float PLAYER_COUNT_FONT_SIZE = 14f;
         private static readonly Color PLAYER_COUNT_COLOR = new Color(1f, 1f, 1f, 0.9f);
+        private static readonly Vector2 PLAYER_COUNT_ANCHOR = Vector2.zero;
+        private static readonly Vector2 PLAYER_COUNT_PIVOT = Vector2.zero;
+        private static readonly Vector2 PLAYER_COUNT_POS = new Vector2(16f, 16f);
+        private static readonly Vector2 PLAYER_COUNT_SIZE = new Vector2(220f, 28f);
+        private TMP_FontAsset _resolvedPlayerCountFont;
 
         private static readonly string[] BOT_NAMES = Network.NetworkBot.BOT_NAMES;
         private MinimapRenderer _minimapRenderer;
@@ -274,26 +280,52 @@ namespace Systems
 
         private void EnsurePlayerCountText()
         {
-            if (_playerCountText != null)
-                return;
+            if (_playerCountText == null)
+            {
+                GameObject textObject = new GameObject("PlayerCountText_Auto", typeof(RectTransform));
+                textObject.transform.SetParent(transform, false);
 
-            GameObject textObject = new GameObject("PlayerCountText_Auto", typeof(RectTransform));
-            textObject.transform.SetParent(transform, false);
+                TextMeshProUGUI text = textObject.AddComponent<TextMeshProUGUI>();
+                text.text = "PLAYERS 0/24";
+                _playerCountText = text;
+            }
 
-            RectTransform rect = (RectTransform)textObject.transform;
-            rect.anchorMin = new Vector2(1f, 0f);
-            rect.anchorMax = new Vector2(1f, 0f);
-            rect.pivot = new Vector2(1f, 0f);
-            rect.anchoredPosition = new Vector2(-20f, 20f);
-            rect.sizeDelta = new Vector2(320f, 48f);
+            ApplyPlayerCountTextStyle(_playerCountText);
+        }
 
-            TextMeshProUGUI text = textObject.AddComponent<TextMeshProUGUI>();
-            text.alignment = TextAlignmentOptions.BottomRight;
+        private void ApplyPlayerCountTextStyle(TMP_Text text)
+        {
+            if (text == null) return;
+
+            RectTransform rect = text.rectTransform;
+            rect.anchorMin = PLAYER_COUNT_ANCHOR;
+            rect.anchorMax = PLAYER_COUNT_ANCHOR;
+            rect.pivot = PLAYER_COUNT_PIVOT;
+            rect.anchoredPosition = PLAYER_COUNT_POS;
+            rect.sizeDelta = PLAYER_COUNT_SIZE;
+
+            text.alignment = TextAlignmentOptions.BottomLeft;
             text.fontSize = PLAYER_COUNT_FONT_SIZE;
             text.color = PLAYER_COUNT_COLOR;
             text.raycastTarget = false;
-            text.text = "PLAYERS 0/24";
-            _playerCountText = text;
+
+            TMP_FontAsset preferredFont = ResolvePlayerCountFont();
+            if (preferredFont != null)
+                text.font = preferredFont;
+        }
+
+        private TMP_FontAsset ResolvePlayerCountFont()
+        {
+            if (_playerCountFont != null)
+                return _playerCountFont;
+
+            if (_resolvedPlayerCountFont != null)
+                return _resolvedPlayerCountFont;
+
+            _resolvedPlayerCountFont = Resources.Load<TMP_FontAsset>(
+                "Fonts & Materials/Electronic Highway Sign SDF");
+
+            return _resolvedPlayerCountFont;
         }
     }
 }

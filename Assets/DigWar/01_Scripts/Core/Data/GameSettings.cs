@@ -49,11 +49,11 @@ namespace Core.Data
         [Tooltip("보석 하나당 획득 점수")]
         [Min(1f)]   public float GemScore = 8f;
         [Tooltip("보석 생성 간격 (초)")]
-        [Min(0.1f)] public float GemSpawnInterval = 0.35f;
+        [Min(0.01f)] public float GemSpawnInterval = 0.07f;
         [Tooltip("플레이어 주변 보석 생성 반경")]
         [Min(5f)]   public float GemSpawnRadius = 15f;
         [Tooltip("동시에 존재할 수 있는 최대 보석 수")]
-        [Min(10)]   public int MaxGemCount = 140;
+        [Min(10)]   public int MaxGemCount = 2000;
         [Tooltip("보석이 빨려들어가기 시작하는 거리")]
         [Min(0.5f)] public float GemMagnetRadius = 3f;
 
@@ -63,7 +63,7 @@ namespace Core.Data
 
         [Header("맵")]
         [Tooltip("원형 맵 반경 (월드 유닛)")]
-        [Min(10f)]  public float MapRadius = 65f;
+        [Min(10f)]  public float MapRadius = 97.5f;
         [Tooltip("플레이어 초기 스폰 반경 비율 (MapRadius * 비율)")]
         [Range(0.1f, 1f)] public float PlayerSpawnRadiusRatio = 0.6f;
         [Tooltip("봇 스폰 반경 비율 (MapRadius * 비율)")]

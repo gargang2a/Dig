@@ -20,11 +20,11 @@ namespace Player
     public class BotSpawner : MonoBehaviour
     {
         private static BotSpawner _serverOwner;
-        private const int FREE_MVP_BOT_HARD_CAP = 12;
+        private const int FREE_MVP_BOT_HARD_CAP = 30;
 
         [Header("봇 설정")]
         [Tooltip("Number of bots to spawn")]
-        [SerializeField] private int _botCount = 12;
+        [SerializeField] private int _botCount = 30;
 
         [Tooltip("서버에서 죽은 봇을 자동으로 보충한다.")]
         [SerializeField] private bool _autoRespawnBots = true;
@@ -40,6 +40,7 @@ namespace Player
         private GameSettings _settings;
         private int _nextBotIndexCursor;
         private int _runtimeTargetBotCount;
+        private bool _initialSpawnCompleted;
         private float _nextRespawnCheckAt;
         private readonly List<Network.NetworkBot> _activeServerBotSnapshot = new List<Network.NetworkBot>(32);
         private readonly bool[] _botIndexSlotUsed = new bool[FREE_MVP_BOT_HARD_CAP];
@@ -61,6 +62,9 @@ namespace Player
         {
             if (_serverOwner == this)
                 _serverOwner = null;
+
+            if (GameManager.Instance != null)
+                GameManager.Instance.OnGameStarted -= OnGameStarted;
 
             NetworkClient.UnregisterSpawnHandler(BOT_ASSET_ID);
         }
@@ -92,16 +96,26 @@ namespace Player
             TrimAllServerBots();
 
             _nextBotIndexCursor = 0;
+            _initialSpawnCompleted = false;
 
-            for (int i = 0; i < _runtimeTargetBotCount; i++)
-                SpawnBot(i);
+            GameManager.Instance.OnGameStarted += OnGameStarted;
+            if (GameManager.Instance.IsGameActive)
+            {
+                SpawnInitialBotsIfNeeded();
+                return;
+            }
 
-            Debug.Log($"[BotSpawner] 서버에서 봇 {_runtimeTargetBotCount}마리 네트워크 스폰 완료");
+            Debug.Log("[BotSpawner] Waiting for game start before spawning bots.");
         }
 
         private void Update()
         {
             if (!NetworkServer.active || !_autoRespawnBots) return;
+            if (GameManager.Instance != null && !GameManager.Instance.IsGameActive) return;
+
+            if (!_initialSpawnCompleted)
+                SpawnInitialBotsIfNeeded();
+
             if (Time.time < _nextRespawnCheckAt) return;
 
             _nextRespawnCheckAt = Time.time + Mathf.Max(0.1f, _respawnCheckInterval);
@@ -137,6 +151,29 @@ namespace Player
                 SpawnBot(botIndex);
                 CaptureServerBots();
             }
+        }
+
+        private void OnDisable()
+        {
+            if (GameManager.Instance != null)
+                GameManager.Instance.OnGameStarted -= OnGameStarted;
+        }
+
+        private void OnGameStarted()
+        {
+            if (!NetworkServer.active) return;
+            SpawnInitialBotsIfNeeded();
+        }
+
+        private void SpawnInitialBotsIfNeeded()
+        {
+            if (_initialSpawnCompleted) return;
+
+            for (int i = 0; i < _runtimeTargetBotCount; i++)
+                SpawnBot(i);
+
+            _initialSpawnCompleted = true;
+            Debug.Log($"[BotSpawner] 서버에서 봇 {_runtimeTargetBotCount}마리 네트워크 스폰 완료");
         }
 
         private int ResolveRuntimeTargetBotCount()

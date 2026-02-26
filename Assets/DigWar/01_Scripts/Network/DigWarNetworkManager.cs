@@ -61,7 +61,7 @@ namespace Network
 
         #pragma warning disable CS0414
         [Tooltip("봇 수 (서버에서만 스폰)")]
-        [SerializeField] private int _botCount = 5;
+        [SerializeField] private int _botCount = 30;
         #pragma warning restore CS0414
 
         private enum AutoStartMode
@@ -160,7 +160,10 @@ namespace Network
             Debug.Log($"[Network] Server started. MaxConnections={maxConnections}");
 
             if (ShouldAutoStartGameplayLoop())
-                TryStartGameplayLoopForDedicatedServer();
+            {
+                Debug.Log(
+                    "[Network] Dedicated server waiting for first player before gameplay loop start.");
+            }
         }
 
         public override void OnServerConnect(NetworkConnectionToClient conn)
@@ -308,6 +311,9 @@ namespace Network
 
             GameObject player = Instantiate(playerPrefab, spawnPos, Quaternion.identity);
             NetworkServer.AddPlayerForConnection(conn, player);
+
+            if (ShouldAutoStartGameplayLoop())
+                TryStartGameplayLoopForDedicatedServer();
 
             Debug.Log($"[Network] Player joined: {conn.address} | spawn {spawnPos}");
         }

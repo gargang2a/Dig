@@ -474,7 +474,7 @@ namespace World
             if (World.GemSpawner.Instance != null)
             {
                 if (!IsNetworkMode || NetworkServer.active)
-                    World.GemSpawner.Instance.DropGemAt(spawnPos);
+                    World.GemSpawner.Instance.DropGemAt(spawnPos, forceDrop: true);
                 return;
             }
 

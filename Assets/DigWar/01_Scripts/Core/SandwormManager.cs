@@ -17,14 +17,14 @@ namespace Core
         [SerializeField] private GameObject _sandwormPrefab;
 
         [Tooltip("Active sandworm count")]
-        [SerializeField] private int _sandwormCount = 9;
+        [SerializeField] private int _sandwormCount = 15;
 
         [Tooltip("스폰 후 활동까지 대기 시간 (초)")]
         [SerializeField] private float _spawnDelay = 5f;
 
         // 샌드웜 전용 assetId
         private const uint SANDWORM_ASSET_ID = 10002;
-        private const int FREE_MVP_SANDWORM_HARD_CAP = 9;
+        private const int FREE_MVP_SANDWORM_HARD_CAP = 15;
         private bool _spawnScheduled;
 
         private void Awake()

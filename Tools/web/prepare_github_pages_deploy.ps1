@@ -278,6 +278,34 @@ function Enable-ImmersiveWebGlIndex {
         $updated = [regex]::Replace($updated, $loadingPattern, $loadingReplacement, 1)
     }
 
+    # GitHub Pages cannot set Content-Encoding per .unityweb file.
+    # If uncompressed siblings exist, switch URLs to avoid runtime parse errors.
+    $indexDir = Split-Path -Path $IndexPath -Parent
+    $buildUrl = "Build"
+    $buildUrlMatch = [regex]::Match($updated, 'var\s+buildUrl\s*=\s*"([^"]+)";')
+    if ($buildUrlMatch.Success) {
+        $buildUrl = $buildUrlMatch.Groups[1].Value
+    }
+    $assetKeys = @("dataUrl", "frameworkUrl", "codeUrl")
+    foreach ($assetKey in $assetKeys) {
+        $assetPattern = $assetKey + ':\s*buildUrl\s*\+\s*"/([^"]+\.unityweb)"'
+        $assetMatch = [regex]::Match($updated, $assetPattern)
+        if (-not $assetMatch.Success) {
+            continue
+        }
+
+        $compressedRelativePath = $assetMatch.Groups[1].Value
+        $uncompressedRelativePath = $compressedRelativePath.Substring(0, $compressedRelativePath.Length - ".unityweb".Length)
+        $uncompressedCandidatePath = Join-Path ($buildUrl -replace '/', '\') ($uncompressedRelativePath -replace '/', '\')
+        $uncompressedAbsolutePath = Join-Path $indexDir $uncompressedCandidatePath
+        if (-not (Test-Path -LiteralPath $uncompressedAbsolutePath)) {
+            continue
+        }
+
+        $assetReplacement = $assetKey + ': buildUrl + "/' + $uncompressedRelativePath + '"'
+        $updated = [regex]::Replace($updated, $assetPattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $assetReplacement }, 1)
+    }
+
     if ($updated -ne $content) {
         Set-Content -LiteralPath $IndexPath -Value $updated -Encoding UTF8
         return $true
@@ -491,7 +519,7 @@ if ($pagesTargetPath -ne ".") {
 $guideLines.Add(('Set-Location "{0}"' -f $repoRoot))
 $guideLines.Add("git fetch $RemoteName")
 $guideLines.Add("git worktree add .\\build\\gh-pages-worktree $RemoteName/gh-pages")
-$guideLines.Add(('robocopy "{0}" "{1}" /MIR' -f $stageCurrent, $worktreeTarget))
+$guideLines.Add(('robocopy "{0}" "{1}" /MIR /XD .git /XF .git' -f $stageCurrent, $worktreeTarget))
 $guideLines.Add("New-Item -ItemType File -Path .\\build\\gh-pages-worktree\\.nojekyll -Force | Out-Null")
 if (-not [string]::IsNullOrWhiteSpace($normalizedCustomDomain)) {
     $guideLines.Add(('Set-Content -Path .\\build\\gh-pages-worktree\\CNAME -Value "{0}" -Encoding ASCII' -f $normalizedCustomDomain))

@@ -89,6 +89,8 @@ namespace Network
             base.OnStartServer();
             _activePlayers.Add(this);
             _nextKillRequestAllowedAt = 0f;
+            _nextBoostDropRequestAllowedAt = 0f;
+            _serverBoostDropScoreBudget = 0f;
             _syncedScale = ResolveScaleFromScore(Score);
             _lastServerPosition = transform.position;
             _lastServerPositionSampleAt = Time.time;
@@ -273,6 +275,33 @@ namespace Network
             }
         }
 
+        [Client]
+        public void RequestBoostGemDrop(Vector3 worldPosition, float currentLocalScore)
+        {
+            if (!isLocalPlayer)
+                return;
+
+            if (!CanSendCommands)
+            {
+                if (NetworkServer.active && World.GemSpawner.Instance != null)
+                    World.GemSpawner.Instance.DropGemAt(worldPosition, forceDrop: true);
+                return;
+            }
+
+            CmdUpdateScore(currentLocalScore);
+            CmdRequestBoostGemDrop(new Vector2(worldPosition.x, worldPosition.y));
+        }
+
+        [Server]
+        private float ResolveGemScoreUnit()
+        {
+            Core.GameManager manager = Core.GameManager.Instance;
+            if (manager == null || manager.Settings == null)
+                return 8f;
+
+            return Mathf.Max(0.1f, manager.Settings.GemScore);
+        }
+
         private bool _nameSynced;
 
         private float _scoreUpdateTimer;
@@ -280,16 +309,18 @@ namespace Network
         private float _assaultSyncTimer;
         private bool _lastSentAssaultState;
         private float _nextKillRequestAllowedAt;
+        private float _nextBoostDropRequestAllowedAt;
         private float _lastAssaultActivatedAt;
         private float _autoRespawnReadyAt = -1f;
         private float _remoteRespawnFallbackAt = -1f;
         private float _ignoreClientScoreSyncUntil;
+        private float _serverBoostDropScoreBudget;
         private Vector2 _lastServerPosition;
         private float _lastServerPositionSampleAt;
         private float _serverSpeedEstimate;
         private float _pendingPredictedScore;
         private float _pendingPredictedScoreExpireAt = -1f;
-        private float _hazardRespawnProtectionUntil;
+        private float _respawnInvincibleUntil;
         private int _killRejectAssaultCount;
         private int _killRejectCooldownCount;
         private int _killRejectDistanceCount;
@@ -298,6 +329,8 @@ namespace Network
         private const float SCORE_SYNC_INTERVAL = 0.12f;
         private const float ASSAULT_SYNC_INTERVAL = 0.1f;
         private const float SCORE_SYNC_GUARD_SECONDS = 0.4f;
+        private const float BOOST_DROP_REQUEST_COOLDOWN_SECONDS = 0.02f;
+        private const float BOOST_DROP_SCORE_EPSILON = 0.01f;
         private const float DEFAULT_KILL_REWARD_SCORE = 35f;
         private const float KILL_REQUEST_COOLDOWN_SECONDS = 0.03f;
         private const float ASSAULT_STATE_GRACE_SECONDS = 0.35f;
@@ -335,7 +368,7 @@ namespace Network
         private const float CLIENT_SCORE_UPSYNC_EPSILON = 0.1f;
         private const float RESPAWN_SANDWORM_SAFE_DISTANCE = 6.5f;
         private const int RESPAWN_POSITION_MAX_ATTEMPTS = 20;
-        private const float HAZARD_RESPAWN_PROTECTION_SECONDS = 1.0f;
+        private const float RESPAWN_INVINCIBILITY_SECONDS = 1.0f;
         private static bool _killDistanceConfigLogged;
 
         // ===== Commands (클라이언트 -> 서버) =====
@@ -355,15 +388,22 @@ namespace Network
         [Command]
         private void CmdUpdateScore(float score)
         {
-            // 서버 권한 점수 갱신 직후에는 짧은 시간 동안 클라이언트 값을 무시한다.
-            if (Time.time < _ignoreClientScoreSyncUntil) return;
-
             float sanitizedScore = Mathf.Max(0f, score);
+
+            // 서버 권한 점수 증가 직후 가드 구간에서는 점수 증가/동일값 업데이트를 무시한다.
+            // 단, 부스트 소모로 인한 점수 감소는 통과시켜 서버 권한 드롭 예산에 반영한다.
+            if (Time.time < _ignoreClientScoreSyncUntil &&
+                sanitizedScore >= Score - CLIENT_SCORE_UPSYNC_EPSILON)
+                return;
 
             // 서버 권한 원칙: 클라이언트는 점수 감소(부스트 소모)만 반영하고
             // 점수 증가(젬/킬)는 ServerAddScore 경로로만 확정한다.
             if (sanitizedScore > Score + CLIENT_SCORE_UPSYNC_EPSILON)
                 return;
+
+            float decreasedAmount = Mathf.Max(0f, Score - sanitizedScore);
+            if (decreasedAmount > 0f)
+                _serverBoostDropScoreBudget += decreasedAmount;
 
             Score = sanitizedScore;
             UpdateSyncedScaleFromScore();
@@ -372,9 +412,42 @@ namespace Network
         [Command]
         private void CmdSetAssaultState(bool isAssaultActive)
         {
-            _isAssaultActive = isAssaultActive && !IsDead;
+            if (IsDead || IsRespawnInvincibleOnServer())
+            {
+                _isAssaultActive = false;
+                return;
+            }
+
+            _isAssaultActive = isAssaultActive;
             if (_isAssaultActive)
                 _lastAssaultActivatedAt = Time.time;
+        }
+
+        [Command]
+        private void CmdRequestBoostGemDrop(Vector2 requestedWorldPosition)
+        {
+            if (IsDead || IsRespawnInvincibleOnServer()) return;
+
+            bool assaultReady =
+                _isAssaultActive ||
+                (Time.time - _lastAssaultActivatedAt) <= ASSAULT_STATE_GRACE_SECONDS;
+            if (!assaultReady) return;
+
+            if (Time.time < _nextBoostDropRequestAllowedAt)
+                return;
+
+            float gemScoreUnit = ResolveGemScoreUnit();
+            if (_serverBoostDropScoreBudget + BOOST_DROP_SCORE_EPSILON < gemScoreUnit)
+                return;
+
+            _serverBoostDropScoreBudget = Mathf.Max(0f, _serverBoostDropScoreBudget - gemScoreUnit);
+            _nextBoostDropRequestAllowedAt = Time.time + BOOST_DROP_REQUEST_COOLDOWN_SECONDS;
+
+            if (World.GemSpawner.Instance == null)
+                return;
+
+            Vector3 dropPosition = new Vector3(requestedWorldPosition.x, requestedWorldPosition.y, 0f);
+            World.GemSpawner.Instance.DropGemAt(dropPosition, forceDrop: true);
         }
 
         [Command]
@@ -445,12 +518,20 @@ namespace Network
             Score = 0f;
             _isAssaultActive = false;
             _nextKillRequestAllowedAt = 0f;
+            _nextBoostDropRequestAllowedAt = 0f;
             _lastAssaultActivatedAt = 0f;
-            _hazardRespawnProtectionUntil = Time.time + HAZARD_RESPAWN_PROTECTION_SECONDS;
+            _respawnInvincibleUntil = Time.time + RESPAWN_INVINCIBILITY_SECONDS;
+            _serverBoostDropScoreBudget = 0f;
             UpdateSyncedScaleFromScore();
             _ignoreClientScoreSyncUntil = Time.time + SCORE_SYNC_GUARD_SECONDS;
             RpcApplyRespawnState(respawnPosition);
             Debug.Log($"[Network] {PlayerName} 리스폰 (서버 SyncVar 리셋)");
+        }
+
+        [Server]
+        public bool IsRespawnInvincibleOnServer()
+        {
+            return !IsDead && Time.time < _respawnInvincibleUntil;
         }
 
         [Server]
@@ -586,6 +667,13 @@ namespace Network
             if (target == null) return;
             if (target == netIdentity) return;
             if (IsDead) return;
+            if (IsRespawnInvincibleOnServer())
+            {
+                RecordKillReject(
+                    "assault",
+                    $"player={ResolveDisplayName()}, reason=respawn-invincible");
+                return;
+            }
             MarkAssaultIntentFromKillRequest();
 
             bool assaultReady =
@@ -616,6 +704,13 @@ namespace Network
             if (targetPlayer != null)
             {
                 if (targetPlayer.IsDead) return;
+                if (targetPlayer.IsRespawnInvincibleOnServer())
+                {
+                    RecordKillReject(
+                        "distance",
+                        $"{ResolveDisplayName()} -> {ResolveDisplayName(target)} | target=respawn-invincible");
+                    return;
+                }
 
                 bool inStrictKillRange = IsValidKillDistance(targetPlayer);
                 bool hasColliderContact = HasColliderContact(target);
@@ -693,10 +788,9 @@ namespace Network
         {
             string source = string.IsNullOrWhiteSpace(hazardName) ? "Hazard" : hazardName.Trim();
 
-            if (string.Equals(source, "Sandworm", System.StringComparison.OrdinalIgnoreCase)
-                && Time.time < _hazardRespawnProtectionUntil)
+            if (IsRespawnInvincibleOnServer())
             {
-                float remaining = Mathf.Max(0f, _hazardRespawnProtectionUntil - Time.time);
+                float remaining = Mathf.Max(0f, _respawnInvincibleUntil - Time.time);
                 Debug.Log(
                     $"[{source}] {ResolveDisplayName()} protected after respawn " +
                     $"({remaining:F2}s remaining)");
@@ -710,6 +804,7 @@ namespace Network
         private bool ServerDieFromServerEvent(string source, string killer)
         {
             if (IsDead) return false;
+            if (IsRespawnInvincibleOnServer()) return false;
 
             IsDead = true;
             _isAssaultActive = false;
@@ -756,7 +851,7 @@ namespace Network
             if (pc != null && applyAmount > 0f)
                 pc.AddScore(applyAmount);
 
-            if (playCollectSound && Systems.SoundManager.Instance != null)
+            if (playCollectSound && applyAmount > 0f && Systems.SoundManager.Instance != null)
                 Systems.SoundManager.Instance.PlayGemCollect();
         }
 

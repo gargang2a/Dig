@@ -32,7 +32,7 @@ namespace Systems
         [SerializeField] private AudioClip _boostLoopClip; // Engine Source??
 
         [Header("Settings")]
-        [SerializeField, Range(0f, 1f)] private float _masterVolume = 1f;
+        [SerializeField, Range(0f, 1f)] private float _masterVolume = 0.5f;
         [SerializeField] private float _gemSoundCooldown = 0.05f; // ?덈Т ??? ?ъ깮 諛⑹?
         [SerializeField] private bool _startMuted = false;
         [SerializeField] private bool _enableGlobalMuteHotkey = true;

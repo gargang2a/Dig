@@ -27,12 +27,12 @@ MonoBehaviour:
   BaseTunnelLength: 10
   TunnelLengthPerScore: 0.5
   GemScore: 8
-  GemSpawnInterval: 0.35
+  GemSpawnInterval: 0.07
   GemSpawnRadius: 15
-  MaxGemCount: 140
+  MaxGemCount: 2000
   GemMagnetRadius: 1
   KillRewardScore: 35
-  MapRadius: 65
+  MapRadius: 97.5
   PlayerSpawnRadiusRatio: 0.6
   BotSpawnRadiusRatio: 0.7
   SandwormSpawnRadiusRatio: 0.8

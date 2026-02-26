@@ -1881,10 +1881,10 @@ MonoBehaviour:
   _mainBgm: {fileID: 8300000, guid: d4028894f5b017f4bb91b05bdd88e940, type: 3}
   _gemCollectClip: {fileID: 8300000, guid: 8804980aac47fb940a5f8c326c02578e, type: 3}
   _playerDieClip: {fileID: 8300000, guid: 5eba6e5e60960e44496787d5dde72da0, type: 3}
-  _killConfirmClip: {fileID: 8300000, guid: a8e8384005a350349a78cd1fa8dc4db5, type: 3}
+  _killConfirmClip: {fileID: 8300000, guid: 19cbe2d1a473c1845b62219dd517473a, type: 3}
   _gameStartClip: {fileID: 8300000, guid: 0fb7f2ee8d437cd4c901d80045cd0ca8, type: 3}
   _boostLoopClip: {fileID: 8300000, guid: b177b771182eba449b3610c2bf68d2a4, type: 3}
-  _masterVolume: 1
+  _masterVolume: 0.5
   _gemSoundCooldown: 0.05
   _startMuted: 0
   _enableGlobalMuteHotkey: 1
@@ -1904,7 +1904,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _sandwormPrefab: {fileID: 232078583430665107, guid: 69c48b975478de04f9f53e94baf29680, type: 3}
-  _sandwormCount: 9
+  _sandwormCount: 15
   _spawnDelay: 5
 --- !u!1 &327080196
 GameObject:
@@ -2923,6 +2923,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _scoreText: {fileID: 327080197}
   _playerCountText: {fileID: 0}
+  _playerCountFont: {fileID: 0}
   _rankNames:
   - {fileID: 1674853480}
   - {fileID: 778149751}
@@ -7181,7 +7182,7 @@ MonoBehaviour:
   evaluationInterval: 3
   timeInterpolationGui: 0
   _maxPlayers: 24
-  _botCount: 12
+  _botCount: 30
   _enableAutoStart: 1
   _forceEditorClientMode: 1
   _editorOriginalMode: 1
@@ -7262,7 +7263,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b9c87bdfba886da499db39ad70d91fe1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _botCount: 12
+  _botCount: 30
   _autoRespawnBots: 1
   _respawnCheckInterval: 0.5
   _maxTrimPerCheck: 8
@@ -7872,6 +7873,20 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _gemPrefab: {fileID: 1720624568396576090, guid: e7fb95f52e3acb648827bf6d229cb277, type: 3}
+  _maxDropSpawnPerSecond: 4
+  _dropSpawnStopFillRatio: 0.75
+  _dropClampInset: 1
+  _dropClampJitter: 1
+  _useRandomizedDistribution: 1
+  _randomSpawnRadiusRatio: 1
+  _randomSpawnRadialExponent: 0.65
+  _enableInitialSectorBalancing: 1
+  _initialSectorBalancedSpawnCount: 210
+  _initialSpawnRadialExponent: 1.25
+  _blockDropSpawnDuringInitialFill: 1
+  _dropRecenterStartRatio: 0.78
+  _dropRecenterTargetRatio: 0.68
+  _dropRecenterStrength: 0.75
   _spawnSeed: 123
 --- !u!114 &1866800279
 MonoBehaviour:
@@ -8028,7 +8043,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: Status
+  m_text: Server
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: dc36b3fdc14f47ebb36fd484a67e268a, type: 2}
   m_sharedMaterial: {fileID: 2140032, guid: dc36b3fdc14f47ebb36fd484a67e268a, type: 2}

@@ -32,8 +32,8 @@ namespace World
         private float _nextLocalCollectorLookupAt;
         private NetworkIdentity _networkIdentity;
         private bool _serverCollected;
-        private const float PREDICTED_COLLECT_RESTORE_SECONDS = 0.35f;
-        private const float LOCAL_COLLECTOR_LOOKUP_INTERVAL = 0.25f;
+        private const float PREDICTED_COLLECT_RESTORE_SECONDS = 0.6f;
+        private const float LOCAL_COLLECTOR_LOOKUP_INTERVAL = 0.05f;
         private const float PREDICTED_COLLECT_MARGIN = 0.12f;
         private const float FALLBACK_COLLIDER_RADIUS = 0.35f;
 
@@ -167,6 +167,7 @@ namespace World
             {
                 // ?�트?�크 ?��? ?�버 ?�정 기반?�로�??�집 처리?�다.
                 // ?�라?�언?�는 ?�치�?변경하지 ?�고 발광�??�시?�다.
+                TryApplyClientPredictedCollect();
                 UpdateGlow();
                 return;
             }
@@ -282,6 +283,7 @@ namespace World
         private void TryApplyClientPredictedCollect()
         {
             if (_predictedCollectVisualApplied) return;
+            if (!Network.NetworkPlayer.CanSendCommands) return;
             if (!TryResolveLocalCollector(out Network.NetworkPlayer localNetPlayer)) return;
             if (localNetPlayer == null || localNetPlayer.IsDead) return;
 
@@ -299,6 +301,7 @@ namespace World
             localNetPlayer.ClientPredictGemCollect(score);
             if (Systems.SoundManager.Instance != null)
                 Systems.SoundManager.Instance.PlayGemCollect(isPredicted: true);
+            RequestServerCollect(localNetPlayer);
         }
 
         private bool TryResolveLocalCollector(out Network.NetworkPlayer localNetPlayer)
