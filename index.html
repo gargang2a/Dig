@@ -131,7 +131,10 @@
       window.addEventListener("resize", applyImmersiveCanvasSize);
       applyImmersiveCanvasSize();
 
-      loadingBar.style.display = "block";
+            // digwar-clean-ui
+      if (loadingBar) {
+        loadingBar.style.display = "none";
+      }
 
       var script = document.createElement("script");
       script.src = loaderUrl;

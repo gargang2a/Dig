@@ -1,4 +1,4 @@
-body { padding: 0; margin: 0 }
+﻿body { padding: 0; margin: 0 }
 #unity-container { position: absolute }
 #unity-container.unity-desktop { left: 50%; top: 50%; transform: translate(-50%, -50%) }
 #unity-container.unity-mobile { position: fixed; width: 100%; height: 100% }
@@ -14,3 +14,58 @@ body { padding: 0; margin: 0 }
 #unity-build-title { float: right; margin-right: 10px; line-height: 38px; font-family: arial; font-size: 18px }
 #unity-fullscreen-button { cursor:pointer; float: right; width: 38px; height: 38px; background: url('fullscreen-button.png') no-repeat center }
 #unity-warning { position: absolute; left: 50%; top: 5%; transform: translate(-50%); background: white; padding: 10px; display: none }
+
+/* digwar-clean-fullscreen */
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+#unity-container,
+#unity-container.unity-desktop,
+#unity-container.unity-mobile {
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  transform: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+#unity-canvas {
+  width: 100vw !important;
+  height: 100vh !important;
+  display: block !important;
+  background: #000 !important;
+}
+
+#unity-loading-bar,
+#unity-logo,
+#unity-progress-bar-empty,
+#unity-progress-bar-full,
+#unity-footer,
+#unity-webgl-logo,
+#unity-build-title,
+#unity-fullscreen-button {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+#unity-warning {
+  position: fixed !important;
+  left: 50% !important;
+  top: 20px !important;
+  transform: translateX(-50%) !important;
+  z-index: 9999 !important;
+  max-width: min(92vw, 760px) !important;
+  border-radius: 8px !important;
+}
