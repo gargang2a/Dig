@@ -104,11 +104,12 @@
       }
 
       var buildUrl = "Build";
-      var loaderUrl = buildUrl + "/WebGL.loader.js";
+      var buildVersion = "20260227_035139";
+      var loaderUrl = buildUrl + "/WebGL.loader.js?v=" + buildVersion;
       var config = {
-        dataUrl: buildUrl + "/WebGL.data",
-        frameworkUrl: buildUrl + "/WebGL.framework.js",
-        codeUrl: buildUrl + "/WebGL.wasm",
+        dataUrl: buildUrl + "/WebGL.data?v=" + buildVersion,
+        frameworkUrl: buildUrl + "/WebGL.framework.js?v=" + buildVersion,
+        codeUrl: buildUrl + "/WebGL.wasm?v=" + buildVersion,
         streamingAssetsUrl: "StreamingAssets",
         companyName: "gargang2a",
         productName: "DigWar",
